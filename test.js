@@ -1,16 +1,20 @@
-import tools from "./api.js";
+import tools from "./src/index.js";
 
-console.log(await tools.callAPI([
+console.log(await tools.createAPIData([
     "Players",
     "Staff",
     "Members",
     {
         t: "Command",
-        r: ":h hello"
+        r: ":h hello hello"
     },
     {
         t: "Command",
         r: ":tp me"
+    },
+    {
+        t: "Command",
+        r: ":tocar"
     },
     {
         t: "Command",
