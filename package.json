@@ -4,5 +4,8 @@
   "description": "An API toolkit made to help developers create apps for their ERLC private servers.",
   "author": "nxvixz",
   "type": "module",
-  "main": "index.js"
+  "main": "index.js",
+  "dependencies": {
+    "dotenv": "^17.3.1"
+  }
 }
