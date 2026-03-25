@@ -1,20 +1,30 @@
 # Dev Server
 
 ## Required Dependencies
-- dotenv
-    - Used for ER:LC private server key
-    - Express port for server (Not required)
 
-# How do you import the package?
-Use the following command: `import tools from "./src/index.js";`
+* **dotenv**
 
-You may need to change the location of the import to where you have installed the package.
+  * Used for ER:LC private server key
+  * Optional: Express port for server
 
 ---
+
+# Importing the Package
+
+```js
+import tools from "./src/index.js";
+```
+
+> Adjust the path depending on where the package is located.
+
+---
+
 # Functions
 
 ## `tools.createAPIData(array)`
-Expected function statement:
+
+### Example Usage
+
 ```js
 tools.createAPIData([
     "Players",
@@ -26,80 +36,228 @@ tools.createAPIData([
 ]);
 ```
 
-Returns:
+### Returns
+
 ```js
-{ 
-    query: '?Players=true&Staff=true', 
-    commands: [ ':h test' ] 
+{
+    query: "?Players=true&Queue=true",
+    commands: [":h test"],
+    invalid: {
+        invalidParams: [],
+        invalidCommands: []
+    }
 }
 ```
 
-If an invalid option is used like `"Members"` it will throw an error, and exclude it from the returned query. It will also throw an error for `"players"` as it is case-senstive.
+---
 
-Example Error: `[createAPIData]: Option "Members" is not a valid option`
+## Behavior
 
-### How to include commands
-When using a command this function expects an object in the array shaped the example below:
+### Options
+
+* Must match valid options exactly (case-sensitive)
+* Invalid options are:
+
+  * Logged to console
+  * Added to `invalid.invalidParams`
+  * Excluded from query
+
+### Example Error
+
+```
+[createAPIData]: Option "Members" is not a valid option
+```
+
+---
+
+### Commands
+
+Commands must follow this structure:
+
 ```js
 {
-    t: "Command"
+    t: "Command",
     r: ":h Hello!"
 }
 ```
 
-If an invalid object is provided like the examples below it will return this error:
-`[createAPIData]: Invalid object data used in request, t must be "Command" and r must be a valid command starting with ":"`
+### Invalid Command Object
 
-Examples:
-```js
-{
-    t: "message"
-    r: "Hello!"
-}
 ```
-```js
-{
-    t: "Command"
-    r: "h Hello!"
-}
+[createAPIData]: Invalid object data used in request, t must be "Command" and r must be a valid command starting with ":"
 ```
 
-If a command doesn't exist this function will return `[createAPIData]: Command ":tocar" either doesn't exist or isn't supported`
+### Unsupported Command
 
-If you provide invalid arguments for a command (ex: ":tp me") this function will return `[createAPIData]: Command ":tp" requires 2 args`
+```
+[createAPIData]: Command ":tocar" is not supported
+```
+
+### Invalid Arguments
+
+```
+[createAPIData]: Command ":tp" requires 2 args
+```
+
+or (for string-ending commands):
+
+```
+[createAPIData]: Command ":pm" requires 2+ args
+```
+
+### Invalid Commands Tracking
+
+Invalid commands are added to:
+
+```js
+invalid.invalidCommands
+```
+
+---
 
 ## `tools.getPrivateServerAPI(query)`
-Expected function statement:
+
+### Example Usage
+
 ```js
 await tools.getPrivateServerAPI("?Players=true");
 ```
 
-If an error is encountered it will return `undefined` so make sure you have a console you can easily view to ensure everything is working correctly. If there is no error it will return the responce body recived from the API.
+### Notes
 
-A query is **not** required as the API will still return information without a query.
+* `query` is optional
+* Automatically handles rate limits (waits and retries)
+* Returns:
 
-### Example Errors
+  * API response on success
+  * Error object on failure
+
 ---
-Rate Limit Error: `[getPrivateServerAPI]: You are currently being rate limited! Please try again in 30 seconds`
 
-Invalid Key Error: `[getPrivateServerAPI]: Recieved a 403 error 2 times, suspending API calls as the server key may be invalid`
+## Possible Errors
 
-No API key provided: `[getPrivateServerAPI]: PRIVATE_SERVER_KEY was not provided in a .env file`
+### Rate Limit (auto-retry triggered)
 
-## `tools.sendPrivateServerCommand(command)`
-Expected function statement:
-```js
-await tools.sendPrivateServerCommand({command: ":h Hello there!"});
+```
+[getPrivateServerAPI]: You are currently being rate limited! Sending request in 30
 ```
 
-If an error is encountered it will return `undefined` so make sure you have a console you can easily view to ensure everything is working correctly. If there is no error it will return the responce body recived from the API.
+### Invalid API Key (after 2 failures)
 
-A command is expected to be in the shape of a sigular js object, if you provided more then one command in the object it will return `[sendPrivateServerCommand]: You may only send one command at a time` due to the API limits.
+```js
+{
+    code: "forbidden",
+    error: "[getPrivateServerAPI]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
+}
+```
 
-### Example Errors
+### Missing API Key
+
+```js
+{
+    code: "invalid_env",
+    error: "[getPrivateServerAPI]: PRIVATE_SERVER_KEY was not provided in a .env file"
+}
+```
+
+### API Error Response
+
+```js
+{
+    code: "api-error",
+    error: "[getPrivateServerAPI]: Encountered an error while attempting to fetch <url>",
+    apiResponse: { ... }
+}
+```
+
 ---
-Rate Limit Error: `[sendPrivateServerCommand]: You are currently being rate limited! Please try again in 30 seconds`
 
-Invalid Key Error: `[sendPrivateServerCommand]: Recieved a 403 error 2 times, suspending API calls as the server key may be invalid`
+## `tools.sendPrivateServerCommand(command)`
 
-No API key provided: `[sendPrivateServerCommand]: PRIVATE_SERVER_KEY was not provided in a .env file`
+### Example Usage
+
+```js
+await tools.sendPrivateServerCommand({
+    command: ":h Hello there!"
+});
+```
+
+---
+
+## Requirements
+
+* Must be a **single object**
+* Must contain only:
+
+```js
+{ command: "..." }
+```
+
+---
+
+## Validation Errors
+
+### Invalid Object
+
+```js
+{
+    code: "invalid_object",
+    error: "[sendPrivateServerCommand]: You must include a valid object"
+}
+```
+
+### Multiple Keys
+
+```js
+{
+    code: "too_many_objects",
+    error: "[sendPrivateServerCommand]: You may only send one command at a time"
+}
+```
+
+### Invalid Key Name
+
+```js
+{
+    code: "invalid_object",
+    error: '[sendPrivateServerCommand]: Object key must start with "command"'
+}
+```
+
+---
+
+## Runtime Errors
+
+### Rate Limit (auto-retry triggered)
+
+```
+[sendPrivateServerCommand]: You are currently being rate limited! Sending request in 30
+```
+
+### Invalid API Key
+
+```js
+{
+    code: "forbidden",
+    error: "[sendPrivateServerCommand]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
+}
+```
+
+### Missing API Key
+
+```js
+{
+    code: "invalid_env",
+    error: "[sendPrivateServerCommand]: PRIVATE_SERVER_KEY was not provided in a .env file"
+}
+```
+
+### API Error Response
+
+```js
+{
+    code: "api-error",
+    error: "[sendPrivateServerCommand]: Encountered an error while attempting to fetch <url>",
+    apiResponse: { ... }
+}
+```
