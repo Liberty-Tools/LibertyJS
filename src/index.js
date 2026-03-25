@@ -73,13 +73,23 @@ async function createAPIData(j) {
                 if (vc[s[0]]) {
                     const command = vc[s[0]];
                     const commandArgs = command ? command.match(/\[[^\]]+\]/g) : [];
-                    if ((s.length-1) === commandArgs.length) {
-                        commands.push(j[i].r);
+
+                    if (commandArgs.includes("[String]")) {
+                        const stringIndex = commandArgs.indexOf("[String]");
+                        if ((s.length - 1) >= stringIndex) {
+                            commands.push(j[i].r);
+                        } else {
+                            console.error(`[createAPIData]: Command "${String(s[0])}" requires at least ${stringIndex} args`);
+                        }
                     } else {
-                        console.error(`[createAPIData]: command "${String(s[0])}" requires ${commandArgs.length} args`);
+                        if ((s.length - 1) === commandArgs.length) {
+                            commands.push(j[i].r);
+                        } else {
+                            console.error(`[createAPIData]: Command "${String(s[0])}" requires ${commandArgs.length} args`);
+                        }
                     }
                 } else {
-                    console.error(`[createAPIData]: command "${String(s[0])}" either doesn't exist or isn't supported`);
+                    console.error(`[createAPIData]: Command "${String(s[0])}" either doesn't exist or isn't supported`);
                 }
             } 
             else console.error('[createAPIData]: Invalid object data used in request, t must be "Command" and r must be a valid command starting with ":"');
@@ -92,7 +102,7 @@ async function createAPIData(j) {
                 // handle invalid
                 if (!Object.keys(v).includes(j[i])) {
                     invalid.push(j[i]);
-                    console.log(`[createAPIData]: option "${String(j[i])}" is not a valid option`);
+                    console.log(`[createAPIData]: Option "${String(j[i])}" is not a valid option`);
                 }
             }
         }
@@ -125,58 +135,114 @@ let resStatus = {
 }
 
 async function getPrivateServerAPI(query) {
-    const currentTime = (Date.now()) / 1000; // convert ms to seconds
+    const currentTime =  Math.floor(Date.now() / 1000); // convert ms to seconds
 
-    if (!process.env.PRIVATE_SERVER_API || !process.env.PRIVATE_SERVER_API) {
-        console.error("[getPrivateServerAPI]: PRIVATE_SERVER_KEY and/or PRIVATE_SERVER_API where not provided in a .env file."); 
-        return null;
+    if (!process.env.PRIVATE_SERVER_KEY) {
+        console.error("[getPrivateServerAPI]: PRIVATE_SERVER_KEY was not provided in a .env file"); 
+        return;
     }
     if (resStatus.forbiddenErrors >= 2) {
-        console.error("[getPrivateServerAPI]: Recieved a 403 error 2 times, suspending API calls as the server key may be invalid.");
-        return null;
+        console.error("[getPrivateServerAPI]: Recieved a 403 error 2 times, suspending API calls as the server key may be invalid");
+        return;
     }
 
-    if (getRateLimits.reset === null && getRateLimits.remaining === null && getRateLimits.reset === null) {
-        const url = process.env.PRIVATE_SERVER_API + query;
+    if ((currentTime < getRateLimits?.reset) && getRateLimits.remaining === 0) {
+        console.error(`[getPrivateServerAPI]: You are currently being rate limited! Please try again in ${getRateLimits.reset - currentTime} seconds`);
+        return;
+    } else {
+        const url = (process.env.PRIVATE_SERVER_API ?? "https://api.policeroleplay.community/v2/") + "server" + (query ?? "");
         const r = await fetch(url, {
             method: "GET",
-            headers: {
-                'server_key': process.env.PRIVATE_SERVER_KEY,
-            }
+            headers: { 'server-key': process.env.PRIVATE_SERVER_KEY }
         });
 
         const d = await r.json();
 
         if (r.status !== 200) {
-            if (d?.error && d?.message) {
-                console.error(`[getPrivateServerAPI]: Encounted an error while attempting to fetch ${url}. Error: ${d?.error} Reason: ${d?.message}`);
-                return null;
+            if (r.status === 403) {
+                if (resStatus.forbiddenErrors === null) {
+                    resStatus.forbiddenErrors = 1;
+                } else {
+                    resStatus.forbiddenErrors++;
+                }
+            }
+            if (d?.code && d?.message) {
+                console.error(`[getPrivateServerAPI]: Encounted an error while attempting to fetch ${url} \n Error: ${d?.code} - Reason: ${d?.message}`);
+                return;
             } else {
                 console.error(`[getPrivateServerAPI]: Encounted an unknown problem. If this problem consists it may be an issue with the Private Server API. \n Recived: ${d}`);
-                return null;
+                return;
             }
         } else {
             getRateLimits.reset = r.headers.get("X-RateLimit-Reset");
             getRateLimits.limit = r.headers.get("X-RateLimit-Limit");
             getRateLimits.remaining = r.headers.get("X-RateLimit-Remaining");
-
             return d;
         }
-    } else {
-
-    }
-    if (currentTime < getRateLimits.reset) { // being rate limited, wait for rate limit to reset
-
     }
 }
 
-async function sendPRCCommand(command) {
-    if (query = null);
+async function sendPrivateServerCommand(command) {
+    const currentTime =  Math.floor(Date.now() / 1000); // convert ms to seconds
+
+    if (Object.keys(command).length > 1) {
+        console.error("[sendPrivateServerCommand]: You may only send one command at a time"); 
+        return;
+    }
+
+    if (!process.env.PRIVATE_SERVER_KEY) {
+        console.error("[sendPrivateServerCommand]: PRIVATE_SERVER_KEY was not provided in a .env file"); 
+        return;
+    }
+    if (resStatus.forbiddenErrors >= 2) {
+        console.error("[sendPrivateServerCommand]: Recieved a 403 error 2 times, suspending API calls as the server key may be invalid");
+        return;
+    }
+
+    if ((currentTime < getRateLimits?.reset) && getRateLimits.remaining === 0) {
+        console.error(`[sendPrivateServerCommand]: You are currently being rate limited! Please try again in ${getRateLimits.reset - currentTime} seconds`);
+        return;
+    } else {
+        const url = (process.env.PRIVATE_SERVER_API ?? "https://api.policeroleplay.community/v2/") + "server/command"
+        const r = await fetch(url, {
+            method: "POST",
+            headers: { 
+                'server-key': process.env.PRIVATE_SERVER_KEY,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(command)
+        });
+
+        const d = await r.json();
+
+        if (r.status !== 200) {
+            if (r.status === 403) {
+                if (resStatus.forbiddenErrors === null) {
+                    resStatus.forbiddenErrors = 1;
+                } else {
+                    resStatus.forbiddenErrors++;
+                }
+            }
+            if (d?.code && d?.message) {
+                console.error(`[sendPrivateServerCommand]: Encounted an error while attempting to fetch ${url} \n Error: ${d?.code} - Reason: ${d?.message}`);
+                return;
+            } else {
+                console.error(`[sendPrivateServerCommand]: Encountered an unknown problem. If this problem consists it may be an issue with the Private Server API. \n Recived: ${d}`);
+                return;
+            }
+        } else {
+            getRateLimits.reset = r.headers.get("X-RateLimit-Reset");
+            getRateLimits.limit = r.headers.get("X-RateLimit-Limit");
+            getRateLimits.remaining = r.headers.get("X-RateLimit-Remaining");
+            return d;
+        }
+    }
 }
 
 export default {
     createAPIData: async (j) => createAPIData(j),
-    createAPIData: async (j) => createAPIData(j),
-    createAPIData: async (j) => createAPIData(j),
-    callAPI: async (o) => callAPI(o)
+    getValidOptions: () => getValidOptions(),
+    getValidCommands: () => getValidCommands(),
+    getPrivateServerAPI: async (q) => getPrivateServerAPI(q),
+    sendPrivateServerCommand: async (b) => sendPrivateServerCommand(b),
 };
