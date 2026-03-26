@@ -1,263 +1,289 @@
-# Dev Server
+# Dev Package
 
-## Required Dependencies
-
-* **dotenv**
-
-  * Used for ER:LC private server key
-  * Optional: Express port for server
+A lightweight wrapper for the **ER:LC Private Server API**, designed to simplify requests, enforce rate limits, and provide structured error handling.
 
 ---
 
-# Importing the Package
+## Features
 
-```js
-import tools from "./src/index.js";
-```
-
-> Adjust the path depending on where the package is located.
+* Automatic **rate limit handling** (GET + POST)
+* Built-in **API key validation**
+* **403 fail-safe** (halts after repeated failures)
+* Optional **webhook integration**
+* Clean, predictable **error objects**
 
 ---
 
-# Functions
-
-## `tools.createAPIData(array)`
-
-### Example Usage
+## Importing
 
 ```js
-tools.createAPIData([
-    "Players",
-    "Queue",
-    {
-        t: "Command",
-        r: ":h test"
-    }
-]);
-```
-
-### Returns
-
-```js
-{
-    query: "?Players=true&Queue=true",
-    commands: [":h test"],
-    invalid: {
-        invalidParams: [],
-        invalidCommands: []
-    }
-}
+import LibertyTools from "./src/index.js";
 ```
 
 ---
 
-## Behavior
-
-### Options
-
-* Must match valid options exactly (case-sensitive)
-* Invalid options are:
-
-  * Logged to console
-  * Added to `invalid.invalidParams`
-  * Excluded from query
-
-### Example Error
-
-```
-[createAPIData]: Option "Members" is not a valid option
-```
-
----
-
-### Commands
-
-Commands must follow this structure:
+## Initialization
 
 ```js
-{
-    t: "Command",
-    r: ":h Hello!"
-}
-```
-
-### Invalid Command Object
-
-```
-[createAPIData]: Invalid object data used in request, t must be "Command" and r must be a valid command starting with ":"
-```
-
-### Unsupported Command
-
-```
-[createAPIData]: Command ":tocar" is not supported
-```
-
-### Invalid Arguments
-
-```
-[createAPIData]: Command ":tp" requires 2 args
-```
-
-or (for string-ending commands):
-
-```
-[createAPIData]: Command ":pm" requires 2+ args
-```
-
-### Invalid Commands Tracking
-
-Invalid commands are added to:
-
-```js
-invalid.invalidCommands
-```
-
----
-
-## `tools.getPrivateServerAPI(query)`
-
-### Example Usage
-
-```js
-await tools.getPrivateServerAPI("?Players=true");
-```
-
-### Notes
-
-* `query` is optional
-* Automatically handles rate limits (waits and retries)
-* Returns:
-
-  * API response on success
-  * Error object on failure
-
----
-
-## Possible Errors
-
-### Rate Limit (auto-retry triggered)
-
-```
-[getPrivateServerAPI]: You are currently being rate limited! Sending request in 30
-```
-
-### Invalid API Key (after 2 failures)
-
-```js
-{
-    code: "forbidden",
-    error: "[getPrivateServerAPI]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
-}
-```
-
-### Missing API Key
-
-```js
-{
-    code: "invalid_env",
-    error: "[getPrivateServerAPI]: PRIVATE_SERVER_KEY was not provided in a .env file"
-}
-```
-
-### API Error Response
-
-```js
-{
-    code: "api-error",
-    error: "[getPrivateServerAPI]: Encountered an error while attempting to fetch <url>",
-    apiResponse: { ... }
-}
-```
-
----
-
-## `tools.sendPrivateServerCommand(command)`
-
-### Example Usage
-
-```js
-await tools.sendPrivateServerCommand({
-    command: ":h Hello there!"
+const tools = new LibertyTools({
+    SERVER_KEY: process.env.SERVER_KEY,
+    PRIVATE_SERVER_API: "https://api.policeroleplay.community/v2/", // optional
+    WEBHOOK_URL: process.env.WEBHOOK_URL, // optional
+    WEBHOOK_TOKEN: process.env.WEBHOOK_TOKEN // required if WEBHOOK_URL is used
 });
 ```
 
 ---
 
-## Requirements
+## Configuration Options
 
-* Must be a **single object**
-* Must contain only:
-
-```js
-{ command: "..." }
-```
-
----
-
-## Validation Errors
-
-### Invalid Object
-
-```js
-{
-    code: "invalid_object",
-    error: "[sendPrivateServerCommand]: You must include a valid object"
-}
-```
-
-### Multiple Keys
-
-```js
-{
-    code: "too_many_objects",
-    error: "[sendPrivateServerCommand]: You may only send one command at a time"
-}
-```
-
-### Invalid Key Name
-
-```js
-{
-    code: "invalid_object",
-    error: '[sendPrivateServerCommand]: Object key must start with "command"'
-}
-```
+| Option               | Required | Description                  |
+| -------------------- | -------- | ---------------------------- |
+| `SERVER_KEY`         | ✅        | ER:LC private server API key |
+| `PRIVATE_SERVER_API` | ❌        | Base API URL                 |
+| `WEBHOOK_URL`        | ❌        | Webhook base URL             |
+| `WEBHOOK_TOKEN`      | ⚠️       | Required if webhook is used  |
 
 ---
 
-## Runtime Errors
+# Methods
 
-### Rate Limit (auto-retry triggered)
+---
+
+## `getPrivateServerAPI(query)`
+
+Fetch data from the ER:LC Private Server API.
+
+### Example
+
+```js
+const data = await tools.getPrivateServerAPI("?Players=true");
+```
+
+### Notes
+
+* `query` is optional
+* Automatically waits if rate-limited
+* Uses stored GET rate limit state
+
+---
+
+### Rate Limit Handling
+
+If limited:
 
 ```
-[sendPrivateServerCommand]: You are currently being rate limited! Sending request in 30
+[getPrivateServerAPI]: You are currently being rate limited! Sending request in X seconds
 ```
 
-### Invalid API Key
+The request will **pause and retry automatically**.
+
+---
+
+### Possible Errors
+
+#### Forbidden (after 2 failures)
 
 ```js
 {
-    code: "forbidden",
-    error: "[sendPrivateServerCommand]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
+    error: "forbidden",
+    message: "[fetchAPI]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
 }
 ```
 
-### Missing API Key
+#### Missing API Key
 
 ```js
 {
-    code: "invalid_env",
-    error: "[sendPrivateServerCommand]: PRIVATE_SERVER_KEY was not provided in a .env file"
+    error: "invalid_env",
+    message: "[fetchAPI]: SERVER_KEY was not provided in a .env file"
 }
 ```
 
-### API Error Response
+#### API Error
 
 ```js
 {
-    code: "api-error",
-    error: "[sendPrivateServerCommand]: Encountered an error while attempting to fetch <url>",
+    error: "api-error",
+    message: "[fetchAPI]: Encountered an error while attempting to fetch <url>",
     apiResponse: { ... }
 }
 ```
+
+---
+
+## `sendPrivateServerCommand(command)`
+
+Send a command to the private server.
+
+### Example
+
+```js
+await tools.sendPrivateServerCommand({
+    command: ":h Hello world!"
+});
+```
+
+---
+
+### Requirements
+
+* Must be an object
+* Must contain **only one key**
+* Key must be `"command"`
+
+---
+
+### Validation Errors
+
+#### Invalid Object
+
+```js
+{
+    error: "invalid_object",
+    message: "[sendPrivateServerCommand]: You must include a valid object"
+}
+```
+
+#### Too Many Keys
+
+```js
+{
+    error: "too_many_objects",
+    message: "[sendPrivateServerCommand]: You may only send one command at a time"
+}
+```
+
+#### Invalid Key
+
+```js
+{
+    error: "invalid_object",
+    message: '[sendPrivateServerCommand]: Object key must start with "command"'
+}
+```
+
+---
+
+### Rate Limiting
+
+Same behavior as GET:
+
+```
+[sendPrivateServerCommand]: You are currently being rate limited! Sending request in X seconds
+```
+
+---
+
+### API Errors
+
+```js
+{
+    error: "api-error",
+    message: "[fetchAPI]: Encountered an error while attempting to fetch <url>",
+    apiResponse: { ... }
+}
+```
+
+---
+
+## `fetchWebhookEvents()`
+
+Fetch events from your configured webhook.
+
+---
+
+### Example
+
+```js
+const events = await tools.fetchWebhookEvents();
+```
+
+---
+
+### Requirements
+
+* `WEBHOOK_URL` must be set
+* `WEBHOOK_TOKEN` must be set
+
+---
+
+### Errors
+
+#### Webhook Not Enabled
+
+```js
+{
+    error: "webhook_disabled",
+    message: "[fetchWebhookEvents]: Webhook is not configured"
+}
+```
+
+#### Missing Config
+
+```js
+{
+    error: "invalid_env",
+    message: "[fetchWebhookEvents]: You must provide a WEBHOOK_URL and/or a WEBHOOK_TOKEN in a .env file"
+}
+```
+
+#### API Error
+
+```js
+{
+    error: "api-error",
+    message: "[fetchWebhookEvents]: Encountered an error while attempting to fetch <url>",
+    apiResponse: { ... }
+}
+```
+
+---
+
+# Internal Behavior
+
+---
+
+## Rate Limit System
+
+The package tracks:
+
+```js
+this.rateLimits = {
+    get: { limit, remaining, reset },
+    post: { limit, remaining, reset }
+};
+```
+
+* Uses `X-RateLimit-*` headers
+* Automatically delays requests when needed
+* Time is handled using **epoch seconds**
+
+---
+
+## Forbidden Protection
+
+If the API returns `403` twice:
+
+* All future requests are blocked
+* Prevents spam + invalid key abuse
+
+---
+
+## Private Helper Methods
+
+### `#wait(seconds)`
+
+* Internal delay utility
+* Used for rate limiting
+
+### `#fetchAPI(url, options)`
+
+* Core request handler
+* Injects headers
+* Parses JSON
+* Handles:
+
+  * Errors
+  * Rate limits
+  * Auth
