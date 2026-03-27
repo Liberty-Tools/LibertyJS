@@ -1,45 +1,59 @@
 export default class LibertyJS {
-    constructor({ SERVER_KEY, PRIVATE_SERVER_API = "https://api.policeroleplay.community/v2/", WEBHOOK_URL, WEBHOOK_TOKEN  } = {}) {
+    #SERVER_KEY;
+    #PRIVATE_SERVER_API;
+    #useWebhook;
+    #WEBHOOK_URL;
+    #WEBHOOK_TOKEN;
+    #rateLimits;
+    #resStatus;
+
+    constructor({
+        SERVER_KEY,
+        PRIVATE_SERVER_API = "https://api.policeroleplay.community/v2/",
+        WEBHOOK_URL,
+        WEBHOOK_TOKEN
+    } = {}) {
         if (!SERVER_KEY) {
             throw new Error("[LibertyJS]: SERVER_KEY is required");
         }
 
-        this.SERVER_KEY = SERVER_KEY;
-        this.PRIVATE_SERVER_API = PRIVATE_SERVER_API;
+        this.#SERVER_KEY = SERVER_KEY;
+        this.#PRIVATE_SERVER_API = PRIVATE_SERVER_API;
 
         if (WEBHOOK_URL && !WEBHOOK_TOKEN) {
             throw new Error("[LibertyJS]: WEBHOOK_TOKEN is required if you are using a webhook");
         }
 
-        this.useWebhook = !!WEBHOOK_URL;
+        this.#useWebhook = Boolean(WEBHOOK_URL);
 
         if (WEBHOOK_URL && WEBHOOK_TOKEN) {
-            this.WEBHOOK_URL = WEBHOOK_URL;
-            this.WEBHOOK_TOKEN = WEBHOOK_TOKEN;
+            this.#WEBHOOK_URL = WEBHOOK_URL;
+            this.#WEBHOOK_TOKEN = WEBHOOK_TOKEN;
         }
 
-        this.rateLimits = {
+        this.#rateLimits = {
             get: { limit: null, remaining: null, reset: null },
             post: { limit: null, remaining: null, reset: null }
         };
 
-        this.resStatus = {
+        this.#resStatus = {
             forbiddenErrors: 0
         };
     }
 
     #wait(seconds) {
-        return new Promise(r => setTimeout(r, seconds * 1000));
+        return new Promise(resolve => setTimeout(resolve, seconds * 1000));
     }
 
-    async #fetchAPI(url, o = {}) {
-        if (!this.SERVER_KEY) {
+    async #fetchAPI(url, options = {}) {
+        if (!this.#SERVER_KEY) {
             return {
                 error: "invalid_env",
                 message: "[LibertyJS]: SERVER_KEY was not provided in a .env file"
             };
         }
-        if (this.resStatus.forbiddenErrors >= 2) {
+
+        if (this.#resStatus.forbiddenErrors >= 2) {
             return {
                 error: "forbidden",
                 message: "[LibertyJS]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
@@ -47,129 +61,242 @@ export default class LibertyJS {
         }
 
         const isPRC = url.startsWith("https://api.policeroleplay.community/");
-        
-        const method = (o.method || "GET").toUpperCase();
+        const method = (options.method || "GET").toUpperCase();
 
-        let headers = { ...(o.headers || {}) };
+        const headers = { ...(options.headers || {}) };
 
-        // construct body for POST requests IF its a prc endpoint
-        let body = o.body;
-        if (method === "POST" && body !== undefined && isPRC) {
+        let body = options.body;
+        if (method === "POST" && body !== undefined) {
             headers["Content-Type"] = "application/json";
-            body = JSON.stringify(body);
+            body = typeof body === "string" ? body : JSON.stringify(body);
         }
 
-        if (isPRC) headers["server-key"] = this.SERVER_KEY;
+        if (isPRC) {
+            headers["server-key"] = this.#SERVER_KEY;
+        }
+
+        const currentTime = Math.floor(Date.now() / 1000);
+
+        const handleRateLimit = async (rl) => {
+            if (rl.reset && rl.remaining === 0 && currentTime < rl.reset) {
+                const seconds = Math.max(0, rl.reset - currentTime);
+                console.log(`[LibertyJS]: Rate limited (${method}). Waiting ${seconds}s`);
+                await this.#wait(seconds);
+            }
+        };
+
+        if (isPRC) {
+            if (method === "GET") await handleRateLimit(this.#rateLimits.get);
+            if (method === "POST") await handleRateLimit(this.#rateLimits.post);
+        }
 
         const res = await fetch(url, {
-            ...o,
+            ...options,
             method,
             headers,
             body
         });
 
-        const d = await res.json();
+        let data;
+        try {
+            data = await res.json();
+        } catch {
+            data = null;
+        }
 
         if (!res.ok) {
-            if (res.status === 403) this.resStatus.forbiddenErrors++;
+            if (res.status === 403 && isPRC) {
+                this.#resStatus.forbiddenErrors++;
+            }
+
             return {
                 error: "api-error",
                 message: `[LibertyJS]: Encountered an error while attempting to fetch ${url}`,
-                apiResponse: d
-            }
-        } else {
-            if (isPRC) {
-                const target = method === "GET"
-                    ? this.rateLimits.get
-                    : this.rateLimits.post;
-
-                target.reset = Number(res.headers.get("X-RateLimit-Reset"));
-                target.limit = Number(res.headers.get("X-RateLimit-Limit"));
-                target.remaining = Number(res.headers.get("X-RateLimit-Remaining"));
-            }
-            return d;
-        }
-    }
-
-    async getPrivateServerAPI(query) {
-        const url = this.PRIVATE_SERVER_API + "server" + (query ?? "");
-
-        const currentTime =  Math.floor(Date.now() / 1000); // convert ms to seconds
-
-        const rl = this.rateLimits.get;
-        if (rl.reset && rl.remaining === 0 && currentTime < rl.reset) {
-            const seconds = Math.max(0, rl.reset - currentTime);
-            console.log(`[LibertyJS.getPrivateServerAPI]: You are currently being rate limited! Sending request in ${seconds} seconds`);
-            await this.#wait(seconds);
-        }
-        return this.#fetchAPI(url);
-    }
-
-    async sendPrivateServerCommand(command) {
-        const url = this.PRIVATE_SERVER_API + "server/command";
-
-        const currentTime =  Math.floor(Date.now() / 1000); // convert ms to seconds
-
-        if (!command || typeof command !== "object") {
-            return {
-                error: "invalid_object",
-                message: "[LibertyJS.sendPrivateServerCommand]: You must include a valid object"
+                apiResponse: data
             };
         }
 
-        if (Object.keys(command).length > 1) {
+        if (isPRC) {
+            const target = method === "GET"
+                ? this.#rateLimits.get
+                : this.#rateLimits.post;
+
+            target.reset = Number(res.headers.get("X-RateLimit-Reset"));
+            target.limit = Number(res.headers.get("X-RateLimit-Limit"));
+            target.remaining = Number(res.headers.get("X-RateLimit-Remaining"));
+        }
+
+        return data;
+    }
+
+    async getPrivateServerAPI(options = [], includeInvalid = false) {
+        const valid = [
+            "Players",
+            "Staff",
+            "JoinLogs",
+            "Queue",
+            "KillLogs",
+            "CommandLogs",
+            "ModCalls",
+            "EmergencyCalls",
+            "Vehicles"
+        ];
+
+        if (!Array.isArray(options)) {
+            console.error("[LibertyJS.getPrivateServerAPI]: Options must be an array");
             return {
-                error: "too_many_objects",
-                message: "[LibertyJS.sendPrivateServerCommand]: You may only send one command at a time",
+                error: "invalid_input",
+                message: "[LibertyJS.getPrivateServerAPI]: Options must be an array"
             };
-        } else {
-            if (Object.keys(command)[0] !== "command") {
-                return {
-                    error: "invalid_object",
-                    message: '[LibertyJS.sendPrivateServerCommand]: Object key must start with "command"',
-                };
+        }
+
+        const params = [];
+        const invalidOptions = [];
+
+        for (const opt of options) {
+            if (valid.includes(opt)) {
+                params.push(`${opt}=true`);
+            } else {
+                console.log(`[LibertyJS]: Invalid option "${String(opt)}"`);
+                invalidOptions.push(opt);
             }
         }
 
-        const rl = this.rateLimits.post;
-        if (rl.reset && rl.remaining === 0 && currentTime < rl.reset) {
-            const seconds = Math.max(0, rl.reset - currentTime);
-            console.log(`[LibertyJS.sendPrivateServerCommand]: You are currently being rate limited! Sending request in ${seconds} seconds`);
-            await this.#wait(seconds);
+        const query = params.length ? `?${params.join("&")}` : "";
+        const url = this.#PRIVATE_SERVER_API + "server" + query;
+
+        if (!includeInvalid) {
+            return await this.#fetchAPI(url);
         }
-        return this.#fetchAPI(url, { method: "POST", body: command });
+
+        return {
+            data: await this.#fetchAPI(url),
+            invalidOptions
+        };
+    }
+
+    async sendPrivateServerCommand(options = []) {
+        const url = this.#PRIVATE_SERVER_API + "server/command";
+
+        const valid = {
+            ":wanted": ["Player"],
+            ":time": ["Number"],
+            ":stopfire": [],
+            ":respawn": ["Player"],
+            ":tp": ["Player", "Player"],
+            ":startnearfire": ["String"],
+            ":jail": ["Player"],
+            ":pt": ["Number"],
+            ":h": ["String"],
+            ":m": ["String"],
+            ":pm": ["Player", "String"],
+            ":refresh": ["Player"],
+            ":bring": ["Player"],
+            ":heal": ["Player"],
+            ":kick": ["Player", "String"],
+            ":startfire": ["String"],
+            ":unwanted": ["Player"],
+            ":prty": ["Number"],
+            ":stopdumpsterfire": [],
+            ":helper": ["Player/UserId"],
+            ":shutdown": [],
+            ":weather": ["String"],
+            ":unmod": ["Player/UserId"],
+            ":unloadlayout": ["String"],
+            ":unban": ["String"],
+            ":mod": ["Player/UserId"],
+            ":ban": ["Player/UserId"],
+            ":unhelper": ["Player/UserId"],
+            ":log": ["String"],
+            ":kill": ["Player"],
+            ":unadmin": ["Player/UserId"],
+            ":admin": ["Player/UserId"],
+            ":loadlayout": ["String"]
+        };
+
+        if (!Array.isArray(options)) {
+            console.error("[LibertyJS.sendPrivateServerCommand]: Options must be an array");
+            return {
+                error: "invalid_input",
+                message: "[LibertyJS.sendPrivateServerCommand]: Options must be an array"
+            };
+        }
+
+        if (options.length === 0) {
+            console.error("[LibertyJS.sendPrivateServerCommand]: Options must have at least one item");
+            return {
+                error: "invalid_input",
+                message: "[LibertyJS.sendPrivateServerCommand]: Options must have at least one item"
+            };
+        }
+
+        const commands = [];
+
+        for (const cmd of options) {
+            if (!cmd.startsWith(":")) continue;
+
+            const parts = cmd.trim().split(" ");
+            const name = parts[0];
+            const args = parts.slice(1);
+            const schema = valid[name];
+
+            if (!schema) {
+                console.error(`[LibertyJS]: Unsupported command "${name}"`);
+                continue;
+            }
+
+            const validArgs =
+                (schema.at(-1) === "String" && args.length >= schema.length) ||
+                (schema.at(-1) !== "String" && args.length === schema.length);
+
+            if (validArgs) {
+                commands.push(cmd);
+            } else {
+                console.log(`[LibertyJS]: "${name}" requires ${schema.length}${schema.at(-1) === "String" ? "+" : ""} args`);
+            }
+        }
+
+        let successes = 0;
+        let failures = 0;
+        const failureReasons = [];
+
+        for (const command of commands) {
+            const res = await this.#fetchAPI(url, {
+                method: "POST",
+                body: command
+            });
+
+            if (!res?.error) {
+                successes++;
+            } else {
+                failures++;
+                failureReasons.push({
+                    command,
+                    apiResponse: res.apiResponse
+                });
+            }
+        }
+
+        return { successes, failures, failureReasons };
     }
 
     async fetchWebhookEvents() {
-        if (!this.useWebhook) {
+        if (!this.#useWebhook) {
             return {
                 error: "webhook_disabled",
                 message: "[LibertyJS.fetchWebhookEvents]: Webhook is not configured"
             };
         }
 
-        if (!this.WEBHOOK_URL || !this.WEBHOOK_TOKEN) {
+        if (!this.#WEBHOOK_URL || !this.#WEBHOOK_TOKEN) {
             return {
                 error: "invalid_env",
-                message: "[LibertyJS.fetchWebhookEvents]: You must provide a WEBHOOK_URL and/or a WEBHOOK_TOKEN in a .env file"
+                message: "[LibertyJS.fetchWebhookEvents]: Missing WEBHOOK_URL or WEBHOOK_TOKEN"
             };
         }
 
-        const url = this.WEBHOOK_URL + "webhook/" + String(this.WEBHOOK_TOKEN) + "/events";
-        const r = await fetch(url, {
-            method: "GET"
-        });
+        const url = `${this.#WEBHOOK_URL}webhook/${this.#WEBHOOK_TOKEN}/events`;
 
-        const d = await r.json();
-
-        if (r.ok) {
-            return d;
-        } else {
-            return {
-                error: "api-error",
-                message: `[LibertyJS.fetchWebhookEvents]: Encountered an error while attempting to fetch ${url}`,
-                apiResponse: d
-            };
-        }
+        return await this.#fetchAPI(url, { method: "GET" });
     }
 }

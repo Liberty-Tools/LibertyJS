@@ -6,19 +6,19 @@ A lightweight SDK for the **ER:LC Private Server API**, designed to simplify req
 
 ## Features
 
-* Automatic **rate limit handling** (GET + POST)
-* Built-in **API key validation**
-* **403 fail-safe** (halts after repeated failures)
-* Optional **webhook integration**
-* Consistent, structured **error responses**
-* Automatic **JSON handling for POST requests**
+- Automatic **rate limit handling** (GET + POST)
+- Built-in **API key validation**
+- **403 fail-safe** (halts after repeated failures)
+- Optional **webhook integration**
+- Structured **error responses**
+- Automatic **JSON handling for POST requests**
 
 ---
 
 ## Importing
 
 ```js
-import LibertyJS from "./src/index.js";
+import LibertyJS from "libertyjs";
 ```
 
 ---
@@ -38,12 +38,12 @@ const LJS = new LibertyJS({
 
 ## Configuration Options
 
-| Option               | Required | Description                           |
-| -------------------- | -------- | ------------------------------------- |
-| `SERVER_KEY`         | ✅        | ER:LC private server API key          |
-| `PRIVATE_SERVER_API` | ❌        | Base API URL (defaults to PRC v2 API) |
-| `WEBHOOK_URL`        | ❌        | Webhook base URL                      |
-| `WEBHOOK_TOKEN`      | ⚠️       | Required if `WEBHOOK_URL` is provided |
+| Option               | Required | Description                       |
+| -------------------- | -------- | --------------------------------- |
+| `SERVER_KEY`         | ✅        | ER:LC private server API key      |
+| `PRIVATE_SERVER_API` | ❌        | Base API URL (defaults to PRC v2) |
+| `WEBHOOK_URL`        | ❌        | Webhook base URL                  |
+| `WEBHOOK_TOKEN`      | ⚠️       | Required if `WEBHOOK_URL` is set  |
 
 ---
 
@@ -51,44 +51,83 @@ const LJS = new LibertyJS({
 
 ---
 
-## `getPrivateServerAPI(query)`
+## `getPrivateServerAPI(options, includeInvalid?)`
 
 Fetch data from the ER:LC Private Server API.
 
 ### Example
 
 ```js
-const data = await LJS.getPrivateServerAPI("?Players=true");
+const data = await LJS.getPrivateServerAPI([
+    "Players",
+    "Staff"
+]);
 ```
+
+---
+
+### Parameters
+
+| Parameter        | Type       | Description                           |
+| ---------------- | ---------- | ------------------------------------- |
+| `options`        | `string[]` | List of data types to request         |
+| `includeInvalid` | `boolean`  | Return invalid options alongside data |
+
+---
+
+### Valid Options
+
+* Players
+* Staff
+* JoinLogs
+* Queue
+* KillLogs
+* CommandLogs
+* ModCalls
+* EmergencyCalls
+* Vehicles
 
 ---
 
 ### Behavior
 
-* Automatically appends:
-
-  ```
-  /server
-  ```
-* `query` is optional
-* Automatically waits if rate-limited
-* Uses stored **GET rate limit state**
+* Automatically appends `/server`
+* Builds query string internally
+* Waits automatically if rate-limited
 
 ---
 
-### Rate Limiting
+### Example with Invalid Tracking
 
-If rate-limited:
+```js
+const res = await LJS.getPrivateServerAPI(
+    ["Players", "InvalidOption"],
+    true
+);
 
+console.log(res);
+/*
+{
+  data: {...},
+  invalidOptions: ["InvalidOption"]
+}
+*/
 ```
-[LibertyJS.getPrivateServerAPI]: You are currently being rate limited! Sending request in X seconds
-```
-
-The request will **pause and retry automatically**.
 
 ---
 
-### Possible Errors
+### Errors
+
+#### Invalid Input
+
+```js
+{
+    error: "invalid_input",
+    message: "[LibertyJS.getPrivateServerAPI]: Options must be an array"
+}
+```
+
+---
 
 #### Forbidden (after 2 failures)
 
@@ -96,17 +135,6 @@ The request will **pause and retry automatically**.
 {
     error: "forbidden",
     message: "[LibertyJS]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
-}
-```
-
----
-
-#### Missing API Key
-
-```js
-{
-    error: "invalid_env",
-    message: "[LibertyJS]: SERVER_KEY was not provided in a .env file"
 }
 ```
 
@@ -124,83 +152,84 @@ The request will **pause and retry automatically**.
 
 ---
 
-## `sendPrivateServerCommand(command)`
+## `sendPrivateServerCommand(commands)`
 
-Send a command to the private server.
+Send one or more commands to the private server.
 
 ---
 
 ### Example
 
 ```js
-await LJS.sendPrivateServerCommand({
-    command: ":h Hello world!"
-});
+const res = await LJS.sendPrivateServerCommand([
+    ":h Hello world!",
+    ":kick PlayerName Spamming"
+]);
+
+console.log(res);
+/*
+{
+  successes: 2,
+  failures: 0,
+  failureReasons: []
+}
+*/
 ```
 
 ---
 
-### Requirements
+### Parameters
 
-* Must be an **object**
-* Must contain **exactly one key**
-* That key must be `"command"`
+| Parameter  | Type       | Description              |
+| ---------- | ---------- | ------------------------ |
+| `commands` | `string[]` | Array of command strings |
 
 ---
 
-### Validation Errors
+### Behavior
 
-#### Invalid Object
+* Validates supported commands
+* Validates argument count
+* Ignores invalid commands
+* Sends commands sequentially
+* Tracks success/failure per command
+
+---
+
+### Errors
+
+#### Invalid Input
 
 ```js
 {
-    error: "invalid_object",
-    message: "[LibertyJS.sendPrivateServerCommand]: You must include a valid object"
+    error: "invalid_input",
+    message: "[LibertyJS.sendPrivateServerCommand]: Options must be an array"
+}
+```
+
+#### Empty Array
+
+```js
+{
+    error: "invalid_input",
+    message: "[LibertyJS.sendPrivateServerCommand]: Options must have at least one item"
 }
 ```
 
 ---
 
-#### Too Many Keys
+### Failure Example
 
 ```js
 {
-    error: "too_many_objects",
-    message: "[LibertyJS.sendPrivateServerCommand]: You may only send one command at a time"
-}
-```
-
----
-
-#### Invalid Key
-
-```js
-{
-    error: "invalid_object",
-    message: '[LibertyJS.sendPrivateServerCommand]: Object key must start with "command"'
-}
-```
-
----
-
-### Rate Limiting
-
-```
-[LibertyJS.sendPrivateServerCommand]: You are currently being rate limited! Sending request in X seconds
-```
-
-* Uses **POST rate limit bucket**
-* Automatically waits before retrying
-
----
-
-### API Errors
-
-```js
-{
-    error: "api-error",
-    message: "[LibertyJS]: Encountered an error while attempting to fetch <url>",
-    apiResponse: { ... }
+  successes: 1,
+  failures: 1,
+  failureReasons: [
+    {
+      command: ":kick Player",
+      apiResponse: { ... }
+    }
+  ]
 }
 ```
 
@@ -229,7 +258,7 @@ const events = await LJS.fetchWebhookEvents();
 
 ### Errors
 
-#### Webhook Not Enabled
+#### Webhook Disabled
 
 ```js
 {
@@ -245,19 +274,7 @@ const events = await LJS.fetchWebhookEvents();
 ```js
 {
     error: "invalid_env",
-    message: "[LibertyJS.fetchWebhookEvents]: You must provide a WEBHOOK_URL and/or a WEBHOOK_TOKEN in a .env file"
-}
-```
-
----
-
-#### API Error
-
-```js
-{
-    error: "api-error",
-    message: "[LibertyJS.fetchWebhookEvents]: Encountered an error while attempting to fetch <url>",
-    apiResponse: { ... }
+    message: "[LibertyJS.fetchWebhookEvents]: Missing WEBHOOK_URL or WEBHOOK_TOKEN"
 }
 ```
 
@@ -267,20 +284,20 @@ const events = await LJS.fetchWebhookEvents();
 
 ---
 
-## Rate Limit System
+## Rate Limiting
 
-The SDK tracks rate limits separately for GET and POST:
+The SDK tracks rate limits separately:
 
 ```js
-this.rateLimits = {
+{
     get: { limit, remaining, reset },
     post: { limit, remaining, reset }
-};
+}
 ```
 
 ### Details
 
-* Uses response headers:
+* Uses headers:
 
   * `X-RateLimit-Limit`
   * `X-RateLimit-Remaining`
@@ -290,65 +307,37 @@ this.rateLimits = {
   ```
   remaining === 0 && currentTime < reset
   ```
-* Time is handled using **epoch seconds**
 
 ---
 
 ## Forbidden Protection
 
-If the API returns `403` twice:
+After 2 consecutive `403` responses:
 
-* `resStatus.forbiddenErrors` increments
-* All future requests return:
-
-```js
-{
-    error: "forbidden",
-    message: "[LibertyJS]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
-}
-```
-
-This prevents:
-
-* Invalid key spam
-* Unnecessary API load
+* All future requests are blocked
+* Prevents invalid API key spam
 
 ---
 
 ## Request Handling (`#fetchAPI`)
 
-Core internal request handler.
+Handles:
 
-### Responsibilities
-
-* Injects headers:
-
-  * `server-key` (for PRC endpoints)
-  * `Content-Type: application/json` (POST only)
-* Stringifies body for POST requests (PRC only)
-* Parses JSON responses
-* Tracks rate limits
-* Handles errors consistently
-
----
-
-## Private Helpers
-
-### `#wait(seconds)`
-
-* Promise-based delay utility
-* Used internally for rate limiting
+* Authentication headers
+* JSON parsing
+* Rate limit tracking
+* Error normalization
 
 ---
 
 ## Notes
 
-* Only PRC API requests receive:
+* Only PRC endpoints use:
 
-  * Authentication headers
-  * Rate limit tracking
-* Non-PRC requests (like webhooks) are treated as standard fetch calls
-* All methods return either:
+  * API key auth
+  * rate limit tracking
+* Webhook requests are treated as standard fetch calls
+* All methods return:
 
-  * **API data**
-  * or a structured **error object**
+  * API data
+  * OR structured error objects
