@@ -1,8 +1,28 @@
 {
-  "name": "liberty-js",
+  "name": "libertyjs",
   "version": "1.0.1",
-  "description": "An API SDK made to help developers create apps for their ER:LC private servers.",
+  "description": "SDK for the ER:LC Private Server API with built-in rate limiting and command validation.",
   "author": "nxvixz",
+  "license": "ISC",
+
   "type": "module",
-  "main": "./src/index.js"
+
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+
+  "files": [
+    "src"
+  ],
+
+  "keywords": [
+    "erlc",
+    "police roleplay community",
+    "liberty county"
+  ],
+
+  "engines": {
+    "node": ">=18"
+  }
 }
