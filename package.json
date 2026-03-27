@@ -1,7 +1,7 @@
 {
   "name": "libertyjs",
   "version": "1.0.1",
-  "description": "SDK for the ER:LC Private Server API with built-in rate limiting and command validation.",
+  "description": "An SDK to help developers create apps for the ER:LC Private Server API.",
   "author": "nxvixz",
   "license": "ISC",
 
