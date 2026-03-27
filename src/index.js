@@ -1,14 +1,14 @@
-export default class LibertyTools {
+export default class LibertyJS {
     constructor({ SERVER_KEY, PRIVATE_SERVER_API = "https://api.policeroleplay.community/v2/", WEBHOOK_URL, WEBHOOK_TOKEN  } = {}) {
         if (!SERVER_KEY) {
-            throw new Error("[LibertyTools]: SERVER_KEY is required");
+            throw new Error("[LibertyJS]: SERVER_KEY is required");
         }
 
         this.SERVER_KEY = SERVER_KEY;
         this.PRIVATE_SERVER_API = PRIVATE_SERVER_API;
 
         if (WEBHOOK_URL && !WEBHOOK_TOKEN) {
-            throw new Error("[LibertyTools]: WEBHOOK_TOKEN is required if you are using a webhook");
+            throw new Error("[LibertyJS]: WEBHOOK_TOKEN is required if you are using a webhook");
         }
 
         this.useWebhook = !!WEBHOOK_URL;
@@ -36,13 +36,13 @@ export default class LibertyTools {
         if (!this.SERVER_KEY) {
             return {
                 error: "invalid_env",
-                message: "[fetchAPI]: SERVER_KEY was not provided in a .env file"
+                message: "[LibertyJS]: SERVER_KEY was not provided in a .env file"
             };
         }
         if (this.resStatus.forbiddenErrors >= 2) {
             return {
                 error: "forbidden",
-                message: "[fetchAPI]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
+                message: "[LibertyJS]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
             };
         }
 
@@ -74,7 +74,7 @@ export default class LibertyTools {
             if (res.status === 403) this.resStatus.forbiddenErrors++;
             return {
                 error: "api-error",
-                message: `[fetchAPI]: Encountered an error while attempting to fetch ${url}`,
+                message: `[LibertyJS]: Encountered an error while attempting to fetch ${url}`,
                 apiResponse: d
             }
         } else {
@@ -99,7 +99,7 @@ export default class LibertyTools {
         const rl = this.rateLimits.get;
         if (rl.reset && rl.remaining === 0 && currentTime < rl.reset) {
             const seconds = Math.max(0, rl.reset - currentTime);
-            console.log(`[getPrivateServerAPI]: You are currently being rate limited! Sending request in ${seconds} seconds`);
+            console.log(`[LibertyJS.getPrivateServerAPI]: You are currently being rate limited! Sending request in ${seconds} seconds`);
             await this.#wait(seconds);
         }
         return this.#fetchAPI(url);
@@ -113,20 +113,20 @@ export default class LibertyTools {
         if (!command || typeof command !== "object") {
             return {
                 error: "invalid_object",
-                message: "[sendPrivateServerCommand]: You must include a valid object"
+                message: "[LibertyJS.sendPrivateServerCommand]: You must include a valid object"
             };
         }
 
         if (Object.keys(command).length > 1) {
             return {
                 error: "too_many_objects",
-                message: "[sendPrivateServerCommand]: You may only send one command at a time",
+                message: "[LibertyJS.sendPrivateServerCommand]: You may only send one command at a time",
             };
         } else {
             if (Object.keys(command)[0] !== "command") {
                 return {
                     error: "invalid_object",
-                    message: '[sendPrivateServerCommand]: Object key must start with "command"',
+                    message: '[LibertyJS.sendPrivateServerCommand]: Object key must start with "command"',
                 };
             }
         }
@@ -134,7 +134,7 @@ export default class LibertyTools {
         const rl = this.rateLimits.post;
         if (rl.reset && rl.remaining === 0 && currentTime < rl.reset) {
             const seconds = Math.max(0, rl.reset - currentTime);
-            console.log(`[sendPrivateServerCommand]: You are currently being rate limited! Sending request in ${seconds} seconds`);
+            console.log(`[LibertyJS.sendPrivateServerCommand]: You are currently being rate limited! Sending request in ${seconds} seconds`);
             await this.#wait(seconds);
         }
         return this.#fetchAPI(url, { method: "POST", body: command });
@@ -144,14 +144,14 @@ export default class LibertyTools {
         if (!this.useWebhook) {
             return {
                 error: "webhook_disabled",
-                message: "[fetchWebhookEvents]: Webhook is not configured"
+                message: "[LibertyJS.fetchWebhookEvents]: Webhook is not configured"
             };
         }
 
         if (!this.WEBHOOK_URL || !this.WEBHOOK_TOKEN) {
             return {
                 error: "invalid_env",
-                message: "[fetchWebhookEvents]: You must provide a WEBHOOK_URL and/or a WEBHOOK_TOKEN in a .env file"
+                message: "[LibertyJS.fetchWebhookEvents]: You must provide a WEBHOOK_URL and/or a WEBHOOK_TOKEN in a .env file"
             };
         }
 
@@ -167,7 +167,7 @@ export default class LibertyTools {
         } else {
             return {
                 error: "api-error",
-                message: `[fetchWebhookEvents]: Encountered an error while attempting to fetch ${url}`,
+                message: `[LibertyJS.fetchWebhookEvents]: Encountered an error while attempting to fetch ${url}`,
                 apiResponse: d
             };
         }
