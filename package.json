@@ -1,7 +1,7 @@
 {
   "name": "liberty-js",
   "version": "1.0.1",
-  "description": "An API toolkit made to help developers create apps for their ERLC private servers.",
+  "description": "An API SDK made to help developers create apps for their ER:LC private servers.",
   "author": "nxvixz",
   "type": "module",
   "main": "./src/index.js"

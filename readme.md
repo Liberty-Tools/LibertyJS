@@ -1,6 +1,6 @@
-# Dev Package
+# LibertyJS
 
-A lightweight wrapper for the **ER:LC Private Server API**, designed to simplify requests, enforce rate limits, and provide structured error handling.
+A lightweight SDK for the **ER:LC Private Server API**, designed to simplify requests, enforce rate limits, and provide structured error handling.
 
 ---
 
@@ -10,14 +10,15 @@ A lightweight wrapper for the **ER:LC Private Server API**, designed to simplify
 * Built-in **API key validation**
 * **403 fail-safe** (halts after repeated failures)
 * Optional **webhook integration**
-* Clean, predictable **error objects**
+* Consistent, structured **error responses**
+* Automatic **JSON handling for POST requests**
 
 ---
 
 ## Importing
 
 ```js
-import LibertyTools from "./src/index.js";
+import LibertyJS from "./src/index.js";
 ```
 
 ---
@@ -25,7 +26,7 @@ import LibertyTools from "./src/index.js";
 ## Initialization
 
 ```js
-const tools = new LibertyTools({
+const LJS = new LibertyJS({
     SERVER_KEY: process.env.SERVER_KEY,
     PRIVATE_SERVER_API: "https://api.policeroleplay.community/v2/", // optional
     WEBHOOK_URL: process.env.WEBHOOK_URL, // optional
@@ -37,12 +38,12 @@ const tools = new LibertyTools({
 
 ## Configuration Options
 
-| Option               | Required | Description                  |
-| -------------------- | -------- | ---------------------------- |
-| `SERVER_KEY`         | ✅        | ER:LC private server API key |
-| `PRIVATE_SERVER_API` | ❌        | Base API URL                 |
-| `WEBHOOK_URL`        | ❌        | Webhook base URL             |
-| `WEBHOOK_TOKEN`      | ⚠️       | Required if webhook is used  |
+| Option               | Required | Description                           |
+| -------------------- | -------- | ------------------------------------- |
+| `SERVER_KEY`         | ✅        | ER:LC private server API key          |
+| `PRIVATE_SERVER_API` | ❌        | Base API URL (defaults to PRC v2 API) |
+| `WEBHOOK_URL`        | ❌        | Webhook base URL                      |
+| `WEBHOOK_TOKEN`      | ⚠️       | Required if `WEBHOOK_URL` is provided |
 
 ---
 
@@ -57,23 +58,30 @@ Fetch data from the ER:LC Private Server API.
 ### Example
 
 ```js
-const data = await tools.getPrivateServerAPI("?Players=true");
+const data = await LJS.getPrivateServerAPI("?Players=true");
 ```
-
-### Notes
-
-* `query` is optional
-* Automatically waits if rate-limited
-* Uses stored GET rate limit state
 
 ---
 
-### Rate Limit Handling
+### Behavior
 
-If limited:
+* Automatically appends:
+
+  ```
+  /server
+  ```
+* `query` is optional
+* Automatically waits if rate-limited
+* Uses stored **GET rate limit state**
+
+---
+
+### Rate Limiting
+
+If rate-limited:
 
 ```
-[getPrivateServerAPI]: You are currently being rate limited! Sending request in X seconds
+[LibertyJS.getPrivateServerAPI]: You are currently being rate limited! Sending request in X seconds
 ```
 
 The request will **pause and retry automatically**.
@@ -87,25 +95,29 @@ The request will **pause and retry automatically**.
 ```js
 {
     error: "forbidden",
-    message: "[fetchAPI]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
+    message: "[LibertyJS]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
 }
 ```
+
+---
 
 #### Missing API Key
 
 ```js
 {
     error: "invalid_env",
-    message: "[fetchAPI]: SERVER_KEY was not provided in a .env file"
+    message: "[LibertyJS]: SERVER_KEY was not provided in a .env file"
 }
 ```
+
+---
 
 #### API Error
 
 ```js
 {
     error: "api-error",
-    message: "[fetchAPI]: Encountered an error while attempting to fetch <url>",
+    message: "[LibertyJS]: Encountered an error while attempting to fetch <url>",
     apiResponse: { ... }
 }
 ```
@@ -116,10 +128,12 @@ The request will **pause and retry automatically**.
 
 Send a command to the private server.
 
+---
+
 ### Example
 
 ```js
-await tools.sendPrivateServerCommand({
+await LJS.sendPrivateServerCommand({
     command: ":h Hello world!"
 });
 ```
@@ -128,9 +142,9 @@ await tools.sendPrivateServerCommand({
 
 ### Requirements
 
-* Must be an object
-* Must contain **only one key**
-* Key must be `"command"`
+* Must be an **object**
+* Must contain **exactly one key**
+* That key must be `"command"`
 
 ---
 
@@ -141,25 +155,29 @@ await tools.sendPrivateServerCommand({
 ```js
 {
     error: "invalid_object",
-    message: "[sendPrivateServerCommand]: You must include a valid object"
+    message: "[LibertyJS.sendPrivateServerCommand]: You must include a valid object"
 }
 ```
+
+---
 
 #### Too Many Keys
 
 ```js
 {
     error: "too_many_objects",
-    message: "[sendPrivateServerCommand]: You may only send one command at a time"
+    message: "[LibertyJS.sendPrivateServerCommand]: You may only send one command at a time"
 }
 ```
+
+---
 
 #### Invalid Key
 
 ```js
 {
     error: "invalid_object",
-    message: '[sendPrivateServerCommand]: Object key must start with "command"'
+    message: '[LibertyJS.sendPrivateServerCommand]: Object key must start with "command"'
 }
 ```
 
@@ -167,11 +185,12 @@ await tools.sendPrivateServerCommand({
 
 ### Rate Limiting
 
-Same behavior as GET:
+```
+[LibertyJS.sendPrivateServerCommand]: You are currently being rate limited! Sending request in X seconds
+```
 
-```
-[sendPrivateServerCommand]: You are currently being rate limited! Sending request in X seconds
-```
+* Uses **POST rate limit bucket**
+* Automatically waits before retrying
 
 ---
 
@@ -180,7 +199,7 @@ Same behavior as GET:
 ```js
 {
     error: "api-error",
-    message: "[fetchAPI]: Encountered an error while attempting to fetch <url>",
+    message: "[LibertyJS]: Encountered an error while attempting to fetch <url>",
     apiResponse: { ... }
 }
 ```
@@ -196,7 +215,7 @@ Fetch events from your configured webhook.
 ### Example
 
 ```js
-const events = await tools.fetchWebhookEvents();
+const events = await LJS.fetchWebhookEvents();
 ```
 
 ---
@@ -215,25 +234,29 @@ const events = await tools.fetchWebhookEvents();
 ```js
 {
     error: "webhook_disabled",
-    message: "[fetchWebhookEvents]: Webhook is not configured"
+    message: "[LibertyJS.fetchWebhookEvents]: Webhook is not configured"
 }
 ```
+
+---
 
 #### Missing Config
 
 ```js
 {
     error: "invalid_env",
-    message: "[fetchWebhookEvents]: You must provide a WEBHOOK_URL and/or a WEBHOOK_TOKEN in a .env file"
+    message: "[LibertyJS.fetchWebhookEvents]: You must provide a WEBHOOK_URL and/or a WEBHOOK_TOKEN in a .env file"
 }
 ```
+
+---
 
 #### API Error
 
 ```js
 {
     error: "api-error",
-    message: "[fetchWebhookEvents]: Encountered an error while attempting to fetch <url>",
+    message: "[LibertyJS.fetchWebhookEvents]: Encountered an error while attempting to fetch <url>",
     apiResponse: { ... }
 }
 ```
@@ -246,7 +269,7 @@ const events = await tools.fetchWebhookEvents();
 
 ## Rate Limit System
 
-The package tracks:
+The SDK tracks rate limits separately for GET and POST:
 
 ```js
 this.rateLimits = {
@@ -255,8 +278,18 @@ this.rateLimits = {
 };
 ```
 
-* Uses `X-RateLimit-*` headers
-* Automatically delays requests when needed
+### Details
+
+* Uses response headers:
+
+  * `X-RateLimit-Limit`
+  * `X-RateLimit-Remaining`
+  * `X-RateLimit-Reset`
+* Automatically delays requests when:
+
+  ```
+  remaining === 0 && currentTime < reset
+  ```
 * Time is handled using **epoch seconds**
 
 ---
@@ -265,25 +298,57 @@ this.rateLimits = {
 
 If the API returns `403` twice:
 
-* All future requests are blocked
-* Prevents spam + invalid key abuse
+* `resStatus.forbiddenErrors` increments
+* All future requests return:
+
+```js
+{
+    error: "forbidden",
+    message: "[LibertyJS]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
+}
+```
+
+This prevents:
+
+* Invalid key spam
+* Unnecessary API load
 
 ---
 
-## Private Helper Methods
+## Request Handling (`#fetchAPI`)
+
+Core internal request handler.
+
+### Responsibilities
+
+* Injects headers:
+
+  * `server-key` (for PRC endpoints)
+  * `Content-Type: application/json` (POST only)
+* Stringifies body for POST requests (PRC only)
+* Parses JSON responses
+* Tracks rate limits
+* Handles errors consistently
+
+---
+
+## Private Helpers
 
 ### `#wait(seconds)`
 
-* Internal delay utility
-* Used for rate limiting
+* Promise-based delay utility
+* Used internally for rate limiting
 
-### `#fetchAPI(url, options)`
+---
 
-* Core request handler
-* Injects headers
-* Parses JSON
-* Handles:
+## Notes
 
-  * Errors
-  * Rate limits
-  * Auth
+* Only PRC API requests receive:
+
+  * Authentication headers
+  * Rate limit tracking
+* Non-PRC requests (like webhooks) are treated as standard fetch calls
+* All methods return either:
+
+  * **API data**
+  * or a structured **error object**

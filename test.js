@@ -1,7 +1,7 @@
-import libertyTools from "./src/index.js";
+import LibertyJS from "./src/index.js";
 import "dotenv/config";
 
-const client = new libertyTools({
+const LJS = new LibertyJS({
     SERVER_KEY: process.env.PRIVATE_SERVER_KEY,
 });
 
