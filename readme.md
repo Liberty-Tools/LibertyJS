@@ -16,10 +16,15 @@ A lightweight SDK for the **ER:LC Private Server API**, designed to simplify req
 
 ---
 
+## Install using npm
+```bash
+npm i @libertytools/libertyjs
+```
+
 ## Importing
 
 ```js
-import LibertyJS from "libertyjs";
+import LibertyJS from "@libertytools/libertyjs";
 ```
 
 ---
