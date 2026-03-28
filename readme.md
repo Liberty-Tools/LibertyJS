@@ -6,12 +6,13 @@ A lightweight SDK for the **ER:LC Private Server API**, designed to simplify req
 
 ## Features
 
-- Automatic **rate limit handling** (GET + POST)
-- Built-in **API key validation**
-- **403 fail-safe** (halts after repeated failures)
-- Optional **webhook integration**
-- Structured **error responses**
-- Automatic **JSON handling for POST requests**
+* Automatic **rate limit handling** (GET + POST)
+* Built-in **API key validation**
+* **403 fail-safe** (halts after repeated failures)
+* Optional **webhook integration**
+* Structured **error responses**
+* Automatic **JSON handling for POST requests**
+* Built-in **command validation + argument checking**
 
 ---
 
@@ -38,12 +39,12 @@ const LJS = new LibertyJS({
 
 ## Configuration Options
 
-| Option               | Required | Description                       |
-| -------------------- | -------- | --------------------------------- |
-| `SERVER_KEY`         | ✅        | ER:LC private server API key      |
-| `PRIVATE_SERVER_API` | ❌        | Base API URL (defaults to PRC v2) |
-| `WEBHOOK_URL`        | ❌        | Webhook base URL                  |
-| `WEBHOOK_TOKEN`      | ⚠️       | Required if `WEBHOOK_URL` is set  |
+| Option               | Required | Description                           |
+| -------------------- | -------- | ------------------------------------- |
+| `SERVER_KEY`         | ✅        | ER:LC private server API key          |
+| `PRIVATE_SERVER_API` | ❌        | Base API URL (defaults to PRC v2)     |
+| `WEBHOOK_URL`        | ❌        | Webhook base URL                      |
+| `WEBHOOK_TOKEN`      | ⚠️       | Required if `WEBHOOK_URL` is provided |
 
 ---
 
@@ -68,10 +69,10 @@ const data = await LJS.getPrivateServerAPI([
 
 ### Parameters
 
-| Parameter        | Type       | Description                           |
-| ---------------- | ---------- | ------------------------------------- |
-| `options`        | `string[]` | List of data types to request         |
-| `includeInvalid` | `boolean`  | Return invalid options alongside data |
+| Parameter        | Type       | Description                         |
+| ---------------- | ---------- | ----------------------------------- |
+| `options`        | `string[]` | List of data types to request       |
+| `includeInvalid` | `boolean`  | Include invalid options in response |
 
 ---
 
@@ -93,6 +94,7 @@ const data = await LJS.getPrivateServerAPI([
 
 * Automatically appends `/server`
 * Builds query string internally
+* Filters invalid options
 * Waits automatically if rate-limited
 
 ---
@@ -165,15 +167,6 @@ const res = await LJS.sendPrivateServerCommand([
     ":h Hello world!",
     ":kick PlayerName Spamming"
 ]);
-
-console.log(res);
-/*
-{
-  successes: 2,
-  failures: 0,
-  failureReasons: []
-}
-*/
 ```
 
 ---
@@ -188,11 +181,45 @@ console.log(res);
 
 ### Behavior
 
-* Validates supported commands
-* Validates argument count
-* Ignores invalid commands
-* Sends commands sequentially
+* Validates:
+
+  * Command existence
+  * Argument count
+* Ignores:
+
+  * Invalid commands
+  * Incorrect argument usage
+* Sends commands **sequentially**
 * Tracks success/failure per command
+
+---
+
+### Response
+
+```js
+{
+  successes: 2,
+  failures: 0,
+  failureReasons: []
+}
+```
+
+---
+
+### Failure Example
+
+```js
+{
+  successes: 1,
+  failures: 1,
+  failureReasons: [
+    {
+      command: ":kick Player",
+      apiResponse: { ... }
+    }
+  ]
+}
+```
 
 ---
 
@@ -218,41 +245,21 @@ console.log(res);
 
 ---
 
-### Failure Example
+# Webhook API
 
-```js
-{
-  successes: 1,
-  failures: 1,
-  failureReasons: [
-    {
-      command: ":kick Player",
-      apiResponse: { ... }
-    }
-  ]
-}
-```
+> Webhooks are accessed via a **nested object**, not top-level methods.
 
 ---
 
-## `fetchWebhookEvents()`
+## `webhook.status()`
 
-Fetch events from your configured webhook.
-
----
+Check webhook health.
 
 ### Example
 
 ```js
-const events = await LJS.fetchWebhookEvents();
+const res = await LJS.webhook.status();
 ```
-
----
-
-### Requirements
-
-* `WEBHOOK_URL` must be set
-* `WEBHOOK_TOKEN` must be set
 
 ---
 
@@ -263,18 +270,32 @@ const events = await LJS.fetchWebhookEvents();
 ```js
 {
     error: "webhook_disabled",
-    message: "[LibertyJS.fetchWebhookEvents]: Webhook is not configured"
+    message: "[LibertyJS.webhook.status]: Webhook is not configured"
 }
 ```
 
 ---
 
-#### Missing Config
+## `webhook.events()`
+
+Fetch webhook events.
+
+### Example
+
+```js
+const events = await LJS.webhook.events();
+```
+
+---
+
+### Errors
+
+#### Webhook Disabled
 
 ```js
 {
-    error: "invalid_env",
-    message: "[LibertyJS.fetchWebhookEvents]: Missing WEBHOOK_URL or WEBHOOK_TOKEN"
+    error: "webhook_disabled",
+    message: "[LibertyJS.webhook.events]: Webhook is not configured"
 }
 ```
 
@@ -286,7 +307,7 @@ const events = await LJS.fetchWebhookEvents();
 
 ## Rate Limiting
 
-The SDK tracks rate limits separately:
+Tracked separately for GET and POST:
 
 ```js
 {
@@ -294,6 +315,8 @@ The SDK tracks rate limits separately:
     post: { limit, remaining, reset }
 }
 ```
+
+---
 
 ### Details
 
@@ -304,17 +327,23 @@ The SDK tracks rate limits separately:
   * `X-RateLimit-Reset`
 * Automatically delays requests when:
 
-  ```
-  remaining === 0 && currentTime < reset
-  ```
+```
+remaining === 0 && currentTime < reset
+```
+
+* Logs:
+
+```
+[LibertyJS]: Rate limited (GET/POST). Waiting Xs
+```
 
 ---
 
 ## Forbidden Protection
 
-After 2 consecutive `403` responses:
+After **2 consecutive `403` responses**:
 
-* All future requests are blocked
+* All future API calls are blocked
 * Prevents invalid API key spam
 
 ---
@@ -323,21 +352,8 @@ After 2 consecutive `403` responses:
 
 Handles:
 
-* Authentication headers
-* JSON parsing
+* Authentication headers (`server-key`)
+* JSON parsing (safe fallback to `null`)
 * Rate limit tracking
 * Error normalization
-
----
-
-## Notes
-
-* Only PRC endpoints use:
-
-  * API key auth
-  * rate limit tracking
-* Webhook requests are treated as standard fetch calls
-* All methods return:
-
-  * API data
-  * OR structured error objects
+* Automatic JSON stringification for POST bodies

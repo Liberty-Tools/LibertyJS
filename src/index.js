@@ -24,7 +24,7 @@ export default class LibertyJS {
             throw new Error("[LibertyJS]: WEBHOOK_TOKEN is required if you are using a webhook");
         }
 
-        this.#useWebhook = Boolean(WEBHOOK_URL);
+        this.#useWebhook = Boolean(WEBHOOK_URL && WEBHOOK_TOKEN);
 
         if (WEBHOOK_URL && WEBHOOK_TOKEN) {
             this.#WEBHOOK_URL = WEBHOOK_URL;
@@ -280,23 +280,30 @@ export default class LibertyJS {
         return { successes, failures, failureReasons };
     }
 
-    async fetchWebhookEvents() {
-        if (!this.#useWebhook) {
-            return {
-                error: "webhook_disabled",
-                message: "[LibertyJS.fetchWebhookEvents]: Webhook is not configured"
-            };
+    webhook = {
+        status: async () => {
+            if (!this.#useWebhook) {
+                return {
+                    error: "webhook_disabled",
+                    message: "[LibertyJS.webhook.status]: Webhook is not configured"
+                };
+            }
+
+            const url = `${this.#WEBHOOK_URL}health`;
+
+            return await this.#fetchAPI(url, { method: "GET" });
+        },
+        events: async () => {
+            if (!this.#useWebhook) {
+                return {
+                    error: "webhook_disabled",
+                    message: "[LibertyJS.webhook.events]: Webhook is not configured"
+                };
+            }
+
+            const url = `${this.#WEBHOOK_URL}webhook/${this.#WEBHOOK_TOKEN}/events`;
+
+            return await this.#fetchAPI(url, { method: "GET" });
         }
-
-        if (!this.#WEBHOOK_URL || !this.#WEBHOOK_TOKEN) {
-            return {
-                error: "invalid_env",
-                message: "[LibertyJS.fetchWebhookEvents]: Missing WEBHOOK_URL or WEBHOOK_TOKEN"
-            };
-        }
-
-        const url = `${this.#WEBHOOK_URL}webhook/${this.#WEBHOOK_TOKEN}/events`;
-
-        return await this.#fetchAPI(url, { method: "GET" });
-    }
+    };
 }
