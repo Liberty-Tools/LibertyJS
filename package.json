@@ -1,8 +1,8 @@
 {
-  "name": "libertyjs",
-  "version": "1.0.1",
+  "name": "@libertytools/libertyjs",
+  "version": "1.0.2",
   "description": "An SDK to help developers create apps for the ER:LC Private Server API.",
-  "author": "nxvixz",
+  "author": "novix",
   "license": "ISC",
 
   "type": "module",
@@ -24,5 +24,10 @@
 
   "engines": {
     "node": ">=18"
+  },
+
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Liberty-Tools/LibertyJS.git"
   }
 }
