@@ -291,6 +291,57 @@ Fetch webhook events.
 const events = await LJS.webhook.events();
 ```
 
+### Responce
+
+Custom Command
+```json
+{
+  "count": 1,
+  "events": [
+    {
+      "_id": "",
+      "webhookId": "",
+      "event": "CustomCommand",
+      "userId": "1", // Roblox userId of who ran a custom command
+      "timestamp": 1774666018, // Unix timestamp in seconds
+      "command": "cmds",
+      "argument": "",
+      "server": "",
+      "createdAt": "2026-03-28T02:46:59.591Z"
+    }
+  ]
+}
+```
+
+Emergency Call
+```json
+{
+  "count": 1,
+  "events": [
+    {
+      "_id": "",
+      "webhookId": "",
+      "event": "EmergencyCallStarted",
+      "userId": "server",
+      "timestamp": 1774666088, // Unix timestamp in seconds
+      "players": [], // Roblox userIds of users responding to the call
+      "caller": 1, // Roblox userId of who ran a custom command
+      "description": "abc", // Postion description (caller made)
+      "callNumber": 733,
+      "team": "Police", // Team the call is directed to
+      "position": [
+        824.1,
+        2444.3
+      ],
+      "positionDescriptor": "abc", // Postion description (caller made)
+      "startedAt": 1774666088, // Unix timestamp in seconds
+      "server": "",
+      "createdAt": "2026-03-28T02:48:10.200Z"
+    }
+  ]
+}
+```
+
 ---
 
 ### Errors
@@ -339,7 +390,7 @@ remaining === 0 && currentTime < reset
 * Logs:
 
 ```
-[LibertyJS]: Rate limited (GET/POST). Waiting Xs
+[LibertyJS]: Rate limited (GET/POST). Waiting X seconds
 ```
 
 ---
