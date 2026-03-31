@@ -2,6 +2,8 @@
 
 A lightweight SDK for the **ER:LC Private Server API**, designed to simplify requests, enforce rate limits, and provide structured error handling.
 
+[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/YFjuXJcnVC)
+
 ---
 
 ## Features
