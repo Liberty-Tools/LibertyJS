@@ -1,6 +1,6 @@
 {
   "name": "@libertytools/libertyjs",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "An SDK to help developers create apps for the ER:LC Private Server API.",
   "author": "novix",
   "license": "ISC",
