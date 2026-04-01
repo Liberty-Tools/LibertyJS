@@ -1,31 +1,25 @@
 {
   "name": "@libertytools/libertyjs",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "An SDK to help developers create apps for the ER:LC Private Server API.",
   "author": "novix",
   "license": "ISC",
-
   "type": "module",
-
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js"
   },
-
   "files": [
     "src"
   ],
-
   "keywords": [
     "erlc",
     "police roleplay community",
     "liberty county"
   ],
-
   "engines": {
     "node": ">=18"
   },
-
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Liberty-Tools/LibertyJS.git"
