@@ -9,7 +9,7 @@ export default class LibertyJS {
 
     constructor({
         SERVER_KEY,
-        PRIVATE_SERVER_API = "https://api.policeroleplay.community/v2/",
+        PRIVATE_SERVER_API = "https://api.erlc.gg/v2/",
         WEBHOOK_URL,
         WEBHOOK_TOKEN
     } = {}) {
@@ -60,7 +60,7 @@ export default class LibertyJS {
             };
         }
 
-        const isPRC = url.startsWith("https://api.policeroleplay.community/");
+        const isPRC = url.startsWith("https://api.erlc.gg/");
         const method = (options.method || "GET").toUpperCase();
 
         const headers = { ...(options.headers || {}) };
