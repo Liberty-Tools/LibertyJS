@@ -1,419 +1,162 @@
 # LibertyJS
 
-A lightweight SDK for the **ER:LC Private Server API**, designed to simplify requests, enforce rate limits, and provide structured error handling.
+A lightweight Node.js SDK for the [ER:LC Private Server API v2](https://apidocs.erlc.gg/).
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/YFjuXJcnVC)
 [![npm](https://img.shields.io/npm/v/@libertytools/libertyjs)](https://www.npmjs.com/package/@libertytools/libertyjs)
 [![downloads](https://img.shields.io/npm/dm/@libertytools/libertyjs)](https://www.npmjs.com/package/@libertytools/libertyjs)
 
----
-
 ## Features
 
-* Automatic **rate limit handling** (GET + POST)
-* Built-in **API key validation**
-* **403 fail-safe** (halts after repeated failures)
-* Optional **webhook integration**
-* Structured **error responses**
-* Automatic **JSON handling for POST requests**
-* Built-in **command validation + argument checking**
+- All ER:LC v2 server-information query fields
+- API-compliant remote command requests
+- Optional global API key support for public applications
+- Bucket-aware rate-limit tracking and automatic `429` retries
+- Structured HTTP, API, and network errors
+- Official Ed25519 event-webhook signature verification
+- Optional compatibility with the Liberty Tools webhook relay
 
----
+## Installation
 
-## Install using npm
 ```bash
-npm i @libertytools/libertyjs
+npm install @libertytools/libertyjs
 ```
 
-## Importing
-
-```js
-import LibertyJS from "@libertytools/libertyjs";
-```
-
----
+LibertyJS requires Node.js 18 or later.
 
 ## Initialization
 
 ```js
-const LJS = new LibertyJS({
+import LibertyJS from "@libertytools/libertyjs";
+
+const erlc = new LibertyJS({
     SERVER_KEY: process.env.SERVER_KEY,
-    PRIVATE_SERVER_API: "https://api.policeroleplay.community/v2/", // optional
-    WEBHOOK_URL: process.env.WEBHOOK_URL, // optional
-    WEBHOOK_TOKEN: process.env.WEBHOOK_TOKEN // required if WEBHOOK_URL is used
+
+    // Required for public applications serving multiple ER:LC servers.
+    GLOBAL_API_KEY: process.env.ERLC_GLOBAL_API_KEY,
+
+    // Optional; defaults to https://api.erlc.gg/v2/
+    PRIVATE_SERVER_API: "https://api.erlc.gg/v2/",
+
+    // Optional; defaults to 3 retries after HTTP 429 responses.
+    MAX_RATE_LIMIT_RETRIES: 3
 });
 ```
 
----
+`AUTHORIZATION` is accepted as an alias for `GLOBAL_API_KEY`.
 
-## Configuration Options
+## Fetch server information
 
-| Option               | Required | Description                           |
-| -------------------- | -------- | ------------------------------------- |
-| `SERVER_KEY`         | ✅        | ER:LC private server API key          |
-| `PRIVATE_SERVER_API` | ❌        | Base API URL (defaults to PRC v2)     |
-| `WEBHOOK_URL`        | ❌        | Webhook base URL                      |
-| `WEBHOOK_TOKEN`      | ⚠️       | Required if `WEBHOOK_URL` is provided |
-
----
-
-# Methods
-
----
-
-## `getPrivateServerAPI(options, includeInvalid?)`
-
-Fetch data from the ER:LC Private Server API.
-
-### Example
+The base server fields are always returned. Pass any combination of the nine optional v2 fields:
 
 ```js
-const data = await LJS.getPrivateServerAPI([
+const server = await erlc.getPrivateServerAPI([
     "Players",
-    "Staff"
+    "Staff",
+    "JoinLogs",
+    "Queue",
+    "KillLogs",
+    "CommandLogs",
+    "ModCalls",
+    "EmergencyCalls",
+    "Vehicles"
 ]);
 ```
 
----
-
-### Parameters
-
-| Parameter        | Type       | Description                         |
-| ---------------- | ---------- | ----------------------------------- |
-| `options`        | `string[]` | List of data types to request       |
-| `includeInvalid` | `boolean`  | Include invalid options in response |
-
----
-
-### Valid Options
-
-* Players
-* Staff
-* JoinLogs
-* Queue
-* KillLogs
-* CommandLogs
-* ModCalls
-* EmergencyCalls
-* Vehicles
-
----
-
-### Behavior
-
-* Automatically appends `/server`
-* Builds query string internally
-* Filters invalid options
-* Waits automatically if rate-limited
-
----
-
-### Example with Invalid Tracking
+Invalid options are ignored. To receive them alongside the API response:
 
 ```js
-const res = await LJS.getPrivateServerAPI(
-    ["Players", "InvalidOption"],
+const { data, invalidOptions } = await erlc.getPrivateServerAPI(
+    ["Players", "NotARealField"],
     true
 );
-
-console.log(res);
-/*
-{
-  data: {...},
-  invalidOptions: ["InvalidOption"]
-}
-*/
 ```
 
----
+Duplicate options are automatically removed so the API does not reject the request for duplicate query parameters.
 
-### Errors
-
-#### Invalid Input
+## Run remote commands
 
 ```js
-{
-    error: "invalid_input",
-    message: "[LibertyJS.getPrivateServerAPI]: Options must be an array"
-}
-```
-
----
-
-#### Forbidden (after 2 failures)
-
-```js
-{
-    error: "forbidden",
-    message: "[LibertyJS]: Received a 403 error 2 times, suspending API calls as the server key may be invalid"
-}
-```
-
----
-
-#### API Error
-
-```js
-{
-    error: "api-error",
-    message: "[LibertyJS]: Encountered an error while attempting to fetch <url>",
-    apiResponse: { ... }
-}
-```
-
----
-
-## `sendPrivateServerCommand(commands)`
-
-Send one or more commands to the private server.
-
----
-
-### Example
-
-```js
-const res = await LJS.sendPrivateServerCommand([
+const result = await erlc.sendPrivateServerCommand([
     ":h Hello world!",
     ":kick PlayerName Spamming"
 ]);
 ```
 
----
+Each command is sent sequentially as the API-required JSON object:
 
-### Parameters
-
-| Parameter  | Type       | Description              |
-| ---------- | ---------- | ------------------------ |
-| `commands` | `string[]` | Array of command strings |
-
----
-
-### Behavior
-
-* Validates:
-
-  * Command existence
-  * Argument count
-* Ignores:
-
-  * Invalid commands
-  * Incorrect argument usage
-* Sends commands **sequentially**
-* Tracks success/failure per command
-
----
-
-### Response
-
-```js
-{
-  successes: 2,
-  failures: 0,
-  failureReasons: []
-}
-```
-
----
-
-### Failure Example
-
-```js
-{
-  successes: 1,
-  failures: 1,
-  failureReasons: [
-    {
-      command: ":kick Player",
-      apiResponse: { ... }
-    }
-  ]
-}
-```
-
----
-
-### Errors
-
-#### Invalid Input
-
-```js
-{
-    error: "invalid_input",
-    message: "[LibertyJS.sendPrivateServerCommand]: Options must be an array"
-}
-```
-
-#### Empty Array
-
-```js
-{
-    error: "invalid_input",
-    message: "[LibertyJS.sendPrivateServerCommand]: Options must have at least one item"
-}
-```
-
----
-
-# Webhook API
-
-> Webhooks are accessed via a **nested object**, not top-level methods.
-
----
-
-## `webhook.status()`
-
-Check webhook health.
-
-### Example
-
-```js
-const res = await LJS.webhook.status();
-```
-
----
-
-### Errors
-
-#### Webhook Disabled
-
-```js
-{
-    error: "webhook_disabled",
-    message: "[LibertyJS.webhook.status]: Webhook is not configured"
-}
-```
-
----
-
-## `webhook.events()`
-
-Fetch webhook events.
-
-### Example
-
-```js
-const events = await LJS.webhook.events();
-```
-
-### Responce
-
-Custom Command
 ```json
-{
-  "count": 1,
-  "events": [
-    {
-      "_id": "",
-      "webhookId": "",
-      "event": "CustomCommand",
-      "userId": "1", // Roblox userId of who ran a custom command
-      "timestamp": 1774666018, // Unix timestamp in seconds
-      "command": "cmds",
-      "argument": "",
-      "server": "",
-      "createdAt": "2026-03-28T02:46:59.591Z"
-    }
-  ]
-}
+{ "command": ":h Hello world!" }
 ```
 
-Emergency Call
-```json
-{
-  "count": 1,
-  "events": [
-    {
-      "_id": "",
-      "webhookId": "",
-      "event": "EmergencyCallStarted",
-      "userId": "server",
-      "timestamp": 1774666088, // Unix timestamp in seconds
-      "players": [], // Roblox userIds of users responding to the call
-      "caller": 1, // Roblox userId of who ran a custom command
-      "description": "abc", // Postion description (caller made)
-      "callNumber": 733,
-      "team": "Police", // Team the call is directed to
-      "position": [
-        824.1,
-        2444.3
-      ],
-      "positionDescriptor": "abc", // Postion description (caller made)
-      "startedAt": 1774666088, // Unix timestamp in seconds
-      "server": "",
-      "createdAt": "2026-03-28T02:48:10.200Z"
-    }
-  ]
-}
-```
+LibertyJS intentionally does not maintain a command allowlist. ER:LC is the authoritative validator, so newly added commands remain usable without an SDK release.
 
----
-
-### Errors
-
-#### Webhook Disabled
+The result includes aggregate counts and each API response:
 
 ```js
 {
-    error: "webhook_disabled",
-    message: "[LibertyJS.webhook.events]: Webhook is not configured"
+    successes: 2,
+    failures: 0,
+    failureReasons: [],
+    results: [
+        { command: ":h Hello world!", response: { message: "Success" } }
+    ]
 }
 ```
 
----
+## Errors
 
-# Internal Behavior
-
----
-
-## Rate Limiting
-
-Tracked separately for GET and POST:
+API failures are returned as structured objects rather than thrown:
 
 ```js
 {
-    get: { limit, remaining, reset },
-    post: { limit, remaining, reset }
+    error: "api-error", // or "rate-limited" / "network-error"
+    message: "...",
+    status: 403,
+    statusText: "Forbidden",
+    code: 2002,
+    headers: {},
+    apiResponse: { code: 2002, message: "..." }
 }
 ```
 
----
+When ER:LC returns `429`, LibertyJS waits for `Retry-After` (falling back to `retry_after` or `X-RateLimit-Reset`) and retries up to `MAX_RATE_LIMIT_RETRIES` times.
 
-### Details
+## Official ER:LC event webhooks
 
-* Uses headers:
+ER:LC signs `timestamp + raw_body` with Ed25519. Pass the exact raw request bytes; do not parse and re-serialize the JSON before verification.
 
-  * `X-RateLimit-Limit`
-  * `X-RateLimit-Remaining`
-  * `X-RateLimit-Reset`
-* Automatically delays requests when:
+```js
+const valid = erlc.webhook.verify({
+    timestamp: request.headers["x-signature-timestamp"],
+    signature: request.headers["x-signature-ed25519"],
+    rawBody: request.rawBody // Buffer or Uint8Array
+});
 
-```
-remaining === 0 && currentTime < reset
-```
-
-* Logs:
-
-```
-[LibertyJS]: Rate limited (GET/POST). Waiting X seconds
+if (!valid) {
+    // Return a 4xx response.
+}
 ```
 
----
+The official public key is built in and exported as `ERLC_WEBHOOK_PUBLIC_KEY`. `verifyWebhook(...)` is also available directly on the SDK instance.
 
-## Forbidden Protection
+## Optional Liberty Tools webhook relay
 
-After **2 consecutive `403` responses**:
+The legacy relay client remains available and is separate from ER:LC's official inbound webhook verification:
 
-* All future API calls are blocked
-* Prevents invalid API key spam
+```js
+const erlc = new LibertyJS({
+    SERVER_KEY: process.env.SERVER_KEY,
+    WEBHOOK_URL: process.env.WEBHOOK_URL,
+    WEBHOOK_TOKEN: process.env.WEBHOOK_TOKEN
+});
 
----
+await erlc.webhook.status();
+await erlc.webhook.events();
+```
 
-## Request Handling (`#fetchAPI`)
+## Testing
 
-Handles:
-
-* Authentication headers (`server-key`)
-* JSON parsing (safe fallback to `null`)
-* Rate limit tracking
-* Error normalization
-* Automatic JSON stringification for POST bodies
+```bash
+npm test
+```
