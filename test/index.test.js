@@ -161,3 +161,34 @@ test("verifies official Ed25519 webhook signing format over timestamp + raw body
     assert.equal(sdk.webhook.verify({ timestamp, signature, rawBody }), true);
     assert.equal(sdk.webhook.verify({ timestamp, signature, rawBody: Buffer.from("tampered") }), false);
 });
+
+test("integrates directly with Liberty Tools dashboard webhook IDs", async () => {
+    const calls = [];
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        WEBHOOK_ID: "dashboard-webhook-id",
+        FETCH: async (url, options) => {
+            calls.push({ url: url.toString(), options });
+            return jsonResponse({ ok: true });
+        }
+    });
+
+    assert.equal(sdk.webhook.erlcUrl(), "https://api.libertytools.dev/webhook/dashboard-webhook-id");
+    await sdk.webhook.status();
+    await sdk.webhook.events();
+
+    assert.deepEqual(calls.map(call => call.url), [
+        "https://api.libertytools.dev/health",
+        "https://api.libertytools.dev/webhook/dashboard-webhook-id/events"
+    ]);
+    assert.equal(calls[0].options.headers.has("server-key"), false);
+    assert.equal(calls[1].options.headers.has("Authorization"), false);
+});
+
+test("accepts a full dashboard ER:LC webhook URL", () => {
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        WEBHOOK_ID: "https://api.libertytools.dev/webhook/url-webhook-id"
+    });
+    assert.equal(sdk.webhook.erlcUrl(), "https://api.libertytools.dev/webhook/url-webhook-id");
+});
