@@ -1,4 +1,4 @@
-import { createPublicKey, verify as verifySignature } from "node:crypto";
+import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 
 const DEFAULT_API_URL = "https://api.erlc.gg/v2/";
 const DEFAULT_WEBHOOK_RELAY_URL = "https://api.libertytools.dev/";
@@ -15,6 +15,15 @@ const VALID_SERVER_OPTIONS = new Set([
     "EmergencyCalls",
     "Vehicles"
 ]);
+const SHARED_REQUEST_STATES = new Map();
+
+function createRequestState() {
+    return {
+        rateLimits: new Map(),
+        routeBuckets: new Map(),
+        requestQueue: Promise.resolve()
+    };
+}
 
 export default class LibertyJS {
     #SERVER_KEY;
@@ -26,9 +35,7 @@ export default class LibertyJS {
     #WEBHOOK_PUBLIC_KEY;
     #fetch;
     #maxRateLimitRetries;
-    #rateLimits = new Map();
-    #routeBuckets = new Map();
-    #requestQueue = Promise.resolve();
+    #requestState;
     #resStatus = { forbiddenErrors: 0 };
 
     constructor({
@@ -65,6 +72,14 @@ export default class LibertyJS {
 
         this.#SERVER_KEY = SERVER_KEY;
         this.#GLOBAL_API_KEY = GLOBAL_API_KEY || AUTHORIZATION;
+        const coordinationSecret = this.#GLOBAL_API_KEY
+            ? `global:${this.#GLOBAL_API_KEY}`
+            : `server:${this.#SERVER_KEY}`;
+        const coordinationKey = createHash("sha256").update(coordinationSecret).digest("hex");
+        if (!SHARED_REQUEST_STATES.has(coordinationKey)) {
+            SHARED_REQUEST_STATES.set(coordinationKey, createRequestState());
+        }
+        this.#requestState = SHARED_REQUEST_STATES.get(coordinationKey);
         this.#PRIVATE_SERVER_API = this.#normalizeBaseURL(PRIVATE_SERVER_API);
         this.#WEBHOOK_PUBLIC_KEY = WEBHOOK_PUBLIC_KEY;
         this.#fetch = FETCH;
@@ -82,15 +97,27 @@ export default class LibertyJS {
             throw new Error("[LibertyJS]: API URLs must be non-empty strings");
         }
         const url = new URL(value);
-        url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
+        url.pathname = `${this.#stripTrailingSlashes(url.pathname)}/`;
         return url.toString();
+    }
+
+    #stripTrailingSlashes(value) {
+        let end = value.length;
+        while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+        return value.slice(0, end);
+    }
+
+    #stripLeadingSlashes(value) {
+        let start = 0;
+        while (start < value.length && value.charCodeAt(start) === 47) start++;
+        return value.slice(start);
     }
 
     #extractWebhookId(value) {
         const raw = String(value || "").trim();
         if (!raw) return "";
 
-        const cleaned = raw.split("?")[0].split("#")[0].replace(/\/+$/, "");
+        const cleaned = this.#stripTrailingSlashes(raw.split("?")[0].split("#")[0]);
         const parts = cleaned.split("/").filter(Boolean);
         if (!parts.length) return "";
         if (parts.at(-1).toLowerCase() === "events" && parts.length > 1) return parts.at(-2);
@@ -98,7 +125,7 @@ export default class LibertyJS {
     }
 
     #url(path) {
-        return new URL(path.replace(/^\/+/, ""), this.#PRIVATE_SERVER_API);
+        return new URL(this.#stripLeadingSlashes(path), this.#PRIVATE_SERVER_API);
     }
 
     #wait(milliseconds) {
@@ -111,7 +138,7 @@ export default class LibertyJS {
     }
 
     #readRateLimit(res, routeKey) {
-        const bucket = res.headers.get("X-RateLimit-Bucket") || this.#routeBuckets.get(routeKey) || routeKey;
+        const bucket = res.headers.get("X-RateLimit-Bucket") || this.#requestState.routeBuckets.get(routeKey) || routeKey;
         const numberHeader = name => {
             const value = res.headers.get(name);
             if (value === null || value === "") return null;
@@ -122,8 +149,8 @@ export default class LibertyJS {
         const remaining = numberHeader("X-RateLimit-Remaining");
         const reset = numberHeader("X-RateLimit-Reset");
 
-        this.#routeBuckets.set(routeKey, bucket);
-        this.#rateLimits.set(bucket, {
+        this.#requestState.routeBuckets.set(routeKey, bucket);
+        this.#requestState.rateLimits.set(bucket, {
             limit,
             remaining,
             reset
@@ -131,11 +158,22 @@ export default class LibertyJS {
     }
 
     async #waitForKnownLimit(routeKey) {
-        const bucket = this.#routeBuckets.get(routeKey);
-        const rateLimit = bucket ? this.#rateLimits.get(bucket) : null;
-        if (!rateLimit || rateLimit.remaining !== 0 || !rateLimit.reset) return;
+        const buckets = new Set();
+        const routeBucket = this.#requestState.routeBuckets.get(routeKey);
+        if (routeBucket) buckets.add(routeBucket);
+        for (const bucket of this.#requestState.rateLimits.keys()) {
+            if (bucket === "global" || bucket.endsWith("-global")) buckets.add(bucket);
+        }
 
-        const waitMilliseconds = Math.max(0, (rateLimit.reset * 1000) - Date.now());
+        let resetAt = 0;
+        for (const bucket of buckets) {
+            const rateLimit = this.#requestState.rateLimits.get(bucket);
+            if (rateLimit?.remaining === 0 && rateLimit.reset) {
+                resetAt = Math.max(resetAt, rateLimit.reset * 1000);
+            }
+        }
+
+        const waitMilliseconds = Math.max(0, resetAt - Date.now());
         if (waitMilliseconds > 0) await this.#wait(waitMilliseconds);
     }
 
@@ -158,11 +196,11 @@ export default class LibertyJS {
     }
 
     async #fetchAPI(url, options = {}) {
-        const request = this.#requestQueue.then(
+        const request = this.#requestState.requestQueue.then(
             () => this.#performFetchAPI(url, options),
             () => this.#performFetchAPI(url, options)
         );
-        this.#requestQueue = request.then(() => undefined, () => undefined);
+        this.#requestState.requestQueue = request.then(() => undefined, () => undefined);
         return await request;
     }
 
@@ -223,7 +261,7 @@ export default class LibertyJS {
             }
 
             if (!res.ok) {
-                const authenticationFailure = res.status === 403 && [2000, 2001, 2002, 2004].includes(data?.code);
+                const authenticationFailure = res.status === 403 && [2000, 2001, 2002, 2003, 2004].includes(data?.code);
                 if (authenticationFailure) this.#resStatus.forbiddenErrors++;
 
                 return {
