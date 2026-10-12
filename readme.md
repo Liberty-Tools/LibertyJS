@@ -143,24 +143,86 @@ if (!valid) {
 
 The official public key is built in and exported as `ERLC_WEBHOOK_PUBLIC_KEY`. `verifyWebhook(...)` is also available directly on the SDK instance.
 
-## Optional Liberty Tools webhook relay
+## Liberty Tools dashboard webhooks
 
-Webhooks created at [dash.libertytools.dev](https://dash.libertytools.dev/dashboard) work directly with LibertyJS. Copy either the webhook ID or the complete â€œWebhook URL for ERLCâ€ shown by the dashboard:
+Webhooks created at [dash.libertytools.dev](https://dash.libertytools.dev/dashboard) work directly with LibertyJS.
+
+### Dashboard setup
+
+1. Sign in to the Liberty Tools dashboard with Roblox OAuth.
+2. Create a webhook and choose Poll, Easy, or Proxy mode.
+3. Copy the dashboard's **Webhook URL for ERLC** into the Event Webhook field in your ER:LC private-server settings.
+4. Copy either the webhook ID or that complete URL into your application's `LIBERTYTOOLS_WEBHOOK_ID` environment variable.
+5. Initialize LibertyJS as shown below.
+
+Treat the webhook ID like a credential. Anyone who obtains a Poll-mode ID may be able to request its stored events.
+
+```env
+SERVER_KEY=your-erlc-server-key
+LIBERTYTOOLS_WEBHOOK_ID=your-dashboard-webhook-id
+```
 
 ```js
+import LibertyJS from "@libertytools/libertyjs";
+
 const erlc = new LibertyJS({
     SERVER_KEY: process.env.SERVER_KEY,
     WEBHOOK_ID: process.env.LIBERTYTOOLS_WEBHOOK_ID
 });
 
-erlc.webhook.erlcUrl(); // URL to paste into ER:LC settings
-await erlc.webhook.status();
-await erlc.webhook.events();
+// This is the URL that belongs in the ER:LC Event Webhook setting.
+console.log(erlc.webhook.erlcUrl());
+
+// Checks whether the Liberty Tools relay service is available.
+const status = await erlc.webhook.status();
 ```
 
-The default relay base is `https://api.libertytools.dev/`. `WEBHOOK_URL` can override it for self-hosted deployments. `WEBHOOK_TOKEN` remains an alias for backward compatibility.
+`WEBHOOK_ID` accepts either of these values:
 
-`webhook.events()` is intended for dashboard webhooks configured in Poll mode. Easy and Proxy modes deliver events to their configured destination instead. The relay is separate from direct ER:LC webhook signature verification through `webhook.verify()`.
+```text
+abc123
+https://api.libertytools.dev/webhook/abc123
+```
+
+### Choosing a dashboard mode
+
+| Mode | Delivery behavior | LibertyJS usage |
+| --- | --- | --- |
+| Poll | Liberty Tools stores events until the application requests them. | Call `webhook.events()`. |
+| Easy | Liberty Tools formats and sends events to the destination configured in the dashboard. | No polling is required. |
+| Proxy | Liberty Tools forwards events to the destination configured in the dashboard. | No polling is required. |
+
+### Polling events
+
+Only use `webhook.events()` with a Poll-mode dashboard webhook:
+
+```js
+const response = await erlc.webhook.events();
+
+if (response?.error) {
+    console.error(response.status, response.apiResponse);
+} else {
+    for (const event of response.events ?? []) {
+        console.log(event.event, event);
+    }
+}
+```
+
+The response contains `count` and `events`. Current event types include custom in-game commands and emergency calls.
+
+### Relay configuration options
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `WEBHOOK_ID` | Yes for relay methods | Dashboard webhook ID or complete ER:LC webhook URL. |
+| `WEBHOOK_URL` | No | Relay base URL; defaults to `https://api.libertytools.dev/`. Use this for a self-hosted relay. |
+| `WEBHOOK_TOKEN` | No | Backward-compatible alias for `WEBHOOK_ID`. |
+
+Do not confuse the dashboard relay with direct webhook verification:
+
+- Use `webhook.events()` for Liberty Tools Poll mode.
+- Use `webhook.verify()` when your own application directly receives signed POST requests from ER:LC.
+- Easy and Proxy modes deliver to the destination configured in the dashboard and do not need `webhook.events()`.
 
 ## Testing
 
