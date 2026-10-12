@@ -123,6 +123,49 @@ test("serializes concurrent requests so learned limits cannot be raced", async (
     assert.equal(maximumActive, 1);
 });
 
+test("coordinates concurrent requests across instances sharing a global API key", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const fetch = async () => {
+        active++;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active--;
+        return jsonResponse({ Name: "Test" });
+    };
+    const first = new LibertyJS({ SERVER_KEY: "server-one", GLOBAL_API_KEY: "shared-global-key", FETCH: fetch });
+    const second = new LibertyJS({ SERVER_KEY: "server-two", GLOBAL_API_KEY: "shared-global-key", FETCH: fetch });
+
+    await Promise.all([first.getPrivateServerAPI(), second.getPrivateServerAPI()]);
+    assert.equal(maximumActive, 1);
+});
+
+test("applies a known global bucket before a route is seen for the first time", async () => {
+    const reset = Math.floor(Date.now() / 1000) + 1;
+    let postStartedAt = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "global-route-server",
+        GLOBAL_API_KEY: "global-route-key",
+        FETCH: async (url, options) => {
+            if (options.method === "GET") {
+                return jsonResponse({ Name: "Test" }, {
+                    headers: {
+                        "X-RateLimit-Bucket": "global",
+                        "X-RateLimit-Remaining": "0",
+                        "X-RateLimit-Reset": String(reset)
+                    }
+                });
+            }
+            postStartedAt = Date.now();
+            return jsonResponse({ message: "Success" });
+        }
+    });
+
+    await sdk.getPrivateServerAPI();
+    await sdk.sendPrivateServerCommand([":h waits for global bucket"]);
+    assert.ok(postStartedAt >= reset * 1000);
+});
+
 test("preserves HTTP status, error code, headers, and response body", async () => {
     const sdk = new LibertyJS({
         SERVER_KEY: "server-secret",
@@ -148,6 +191,25 @@ test("normalizes network failures", async () => {
     const response = await sdk.getPrivateServerAPI();
     assert.equal(response.error, "network-error");
     assert.equal(response.cause, "connection failed");
+});
+
+test("stops after repeated invalid global API key responses", async () => {
+    let calls = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        GLOBAL_API_KEY: "invalid-global-key",
+        FETCH: async () => {
+            calls++;
+            return jsonResponse({ code: 2003, message: "Invalid global API key" }, { status: 403 });
+        }
+    });
+
+    await sdk.getPrivateServerAPI();
+    await sdk.getPrivateServerAPI();
+    await sdk.getPrivateServerAPI();
+    const blocked = await sdk.getPrivateServerAPI();
+    assert.equal(calls, 3);
+    assert.equal(blocked.error, "forbidden");
 });
 
 test("verifies official Ed25519 webhook signing format over timestamp + raw body", () => {
