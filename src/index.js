@@ -1,6 +1,7 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
 
 const DEFAULT_API_URL = "https://api.erlc.gg/v2/";
+const DEFAULT_WEBHOOK_RELAY_URL = "https://api.libertytools.dev/";
 const ERLC_WEBHOOK_PUBLIC_KEY =
     "MCowBQYDK2VwAyEAjSICb9pp0kHizGQtdG8ySWsDChfGqi+gyFCttigBNOA=";
 const VALID_SERVER_OPTIONS = new Set([
@@ -37,6 +38,7 @@ export default class LibertyJS {
         PRIVATE_SERVER_API = DEFAULT_API_URL,
         WEBHOOK_URL,
         WEBHOOK_TOKEN,
+        WEBHOOK_ID,
         WEBHOOK_PUBLIC_KEY = ERLC_WEBHOOK_PUBLIC_KEY,
         MAX_RATE_LIMIT_RETRIES = 3,
         FETCH = globalThis.fetch
@@ -53,8 +55,12 @@ export default class LibertyJS {
         if (!Number.isInteger(MAX_RATE_LIMIT_RETRIES) || MAX_RATE_LIMIT_RETRIES < 0) {
             throw new Error("[LibertyJS]: MAX_RATE_LIMIT_RETRIES must be a non-negative integer");
         }
-        if (WEBHOOK_URL && !WEBHOOK_TOKEN) {
-            throw new Error("[LibertyJS]: WEBHOOK_TOKEN is required if you are using a webhook relay");
+        const webhookToken = this.#extractWebhookId(WEBHOOK_ID || WEBHOOK_TOKEN);
+        if (WEBHOOK_ID && WEBHOOK_TOKEN && this.#extractWebhookId(WEBHOOK_ID) !== this.#extractWebhookId(WEBHOOK_TOKEN)) {
+            throw new Error("[LibertyJS]: WEBHOOK_ID and WEBHOOK_TOKEN must identify the same webhook");
+        }
+        if (WEBHOOK_URL && !webhookToken) {
+            throw new Error("[LibertyJS]: WEBHOOK_ID is required if you are using a webhook relay");
         }
 
         this.#SERVER_KEY = SERVER_KEY;
@@ -63,11 +69,11 @@ export default class LibertyJS {
         this.#WEBHOOK_PUBLIC_KEY = WEBHOOK_PUBLIC_KEY;
         this.#fetch = FETCH;
         this.#maxRateLimitRetries = MAX_RATE_LIMIT_RETRIES;
-        this.#useWebhookRelay = Boolean(WEBHOOK_URL && WEBHOOK_TOKEN);
+        this.#useWebhookRelay = Boolean(webhookToken);
 
         if (this.#useWebhookRelay) {
-            this.#WEBHOOK_URL = this.#normalizeBaseURL(WEBHOOK_URL);
-            this.#WEBHOOK_TOKEN = WEBHOOK_TOKEN;
+            this.#WEBHOOK_URL = this.#normalizeBaseURL(WEBHOOK_URL || DEFAULT_WEBHOOK_RELAY_URL);
+            this.#WEBHOOK_TOKEN = webhookToken;
         }
     }
 
@@ -78,6 +84,17 @@ export default class LibertyJS {
         const url = new URL(value);
         url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
         return url.toString();
+    }
+
+    #extractWebhookId(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+
+        const cleaned = raw.split("?")[0].split("#")[0].replace(/\/+$/, "");
+        const parts = cleaned.split("/").filter(Boolean);
+        if (!parts.length) return "";
+        if (parts.at(-1).toLowerCase() === "events" && parts.length > 1) return parts.at(-2);
+        return parts.at(-1);
     }
 
     #url(path) {
@@ -211,7 +228,7 @@ export default class LibertyJS {
 
                 return {
                     error: res.status === 429 ? "rate-limited" : "api-error",
-                    message: `[LibertyJS]: ER:LC API returned HTTP ${res.status} for ${targetURL}`,
+                    message: `[LibertyJS]: ${isERLC ? "ER:LC API" : "Webhook relay"} returned HTTP ${res.status} for ${targetURL}`,
                     status: res.status,
                     statusText: res.statusText,
                     code: data?.code,
@@ -322,6 +339,10 @@ export default class LibertyJS {
 
     webhook = {
         verify: input => this.verifyWebhook(input),
+        erlcUrl: () => {
+            if (!this.#useWebhookRelay) return null;
+            return new URL(`webhook/${encodeURIComponent(this.#WEBHOOK_TOKEN)}`, this.#WEBHOOK_URL).toString();
+        },
         status: async () => {
             if (!this.#useWebhookRelay) {
                 return {
@@ -343,4 +364,4 @@ export default class LibertyJS {
     };
 }
 
-export { ERLC_WEBHOOK_PUBLIC_KEY };
+export { DEFAULT_WEBHOOK_RELAY_URL, ERLC_WEBHOOK_PUBLIC_KEY };
