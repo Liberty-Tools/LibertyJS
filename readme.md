@@ -39,7 +39,10 @@ const erlc = new LibertyJS({
     PRIVATE_SERVER_API: "https://api.erlc.gg/v2/",
 
     // Optional; defaults to 3 retries after HTTP 429 responses.
-    MAX_RATE_LIMIT_RETRIES: 3
+    MAX_RATE_LIMIT_RETRIES: 3,
+
+    // Optional Liberty Tools dashboard webhook ID or full ER:LC webhook URL.
+    WEBHOOK_ID: process.env.LIBERTYTOOLS_WEBHOOK_ID
 });
 ```
 
@@ -142,18 +145,22 @@ The official public key is built in and exported as `ERLC_WEBHOOK_PUBLIC_KEY`. `
 
 ## Optional Liberty Tools webhook relay
 
-The legacy relay client remains available and is separate from ER:LC's official inbound webhook verification:
+Webhooks created at [dash.libertytools.dev](https://dash.libertytools.dev/dashboard) work directly with LibertyJS. Copy either the webhook ID or the complete â€œWebhook URL for ERLCâ€ shown by the dashboard:
 
 ```js
 const erlc = new LibertyJS({
     SERVER_KEY: process.env.SERVER_KEY,
-    WEBHOOK_URL: process.env.WEBHOOK_URL,
-    WEBHOOK_TOKEN: process.env.WEBHOOK_TOKEN
+    WEBHOOK_ID: process.env.LIBERTYTOOLS_WEBHOOK_ID
 });
 
+erlc.webhook.erlcUrl(); // URL to paste into ER:LC settings
 await erlc.webhook.status();
 await erlc.webhook.events();
 ```
+
+The default relay base is `https://api.libertytools.dev/`. `WEBHOOK_URL` can override it for self-hosted deployments. `WEBHOOK_TOKEN` remains an alias for backward compatibility.
+
+`webhook.events()` is intended for dashboard webhooks configured in Poll mode. Easy and Proxy modes deliver events to their configured destination instead. The relay is separate from direct ER:LC webhook signature verification through `webhook.verify()`.
 
 ## Testing
 
