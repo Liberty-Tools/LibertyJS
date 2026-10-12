@@ -1,0 +1,163 @@
+import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
+import test from "node:test";
+import LibertyJS from "../src/index.js";
+
+function jsonResponse(data, init = {}) {
+    return new Response(JSON.stringify(data), {
+        status: init.status || 200,
+        statusText: init.statusText,
+        headers: { "Content-Type": "application/json", ...init.headers }
+    });
+}
+
+test("requests all v2 server fields and sends both authentication headers", async () => {
+    const calls = [];
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        GLOBAL_API_KEY: "global-secret",
+        FETCH: async (url, options) => {
+            calls.push({ url, options });
+            return jsonResponse({ Name: "Test" });
+        }
+    });
+
+    const response = await sdk.getPrivateServerAPI([
+        "Players", "Staff", "JoinLogs", "Queue", "KillLogs", "CommandLogs",
+        "ModCalls", "EmergencyCalls", "Vehicles", "Players", "NotReal"
+    ], true);
+
+    assert.equal(response.data.Name, "Test");
+    assert.deepEqual(response.invalidOptions, ["NotReal"]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.headers.get("server-key"), "server-secret");
+    assert.equal(calls[0].options.headers.get("Authorization"), "global-secret");
+    const url = new URL(calls[0].url);
+    assert.equal(url.pathname, "/v2/server");
+    assert.equal(url.searchParams.get("EmergencyCalls"), "true");
+    assert.equal(url.searchParams.getAll("Players").length, 1);
+});
+
+test("sends API-compliant command objects without a stale allowlist", async () => {
+    const calls = [];
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        FETCH: async (url, options) => {
+            calls.push({ url, options });
+            return jsonResponse({ message: "Success" });
+        }
+    });
+
+    const response = await sdk.sendPrivateServerCommand([":h Hello!", ":futurecommand value"]);
+
+    assert.equal(response.successes, 2);
+    assert.equal(response.failures, 0);
+    assert.equal(calls[0].options.body, JSON.stringify({ command: ":h Hello!" }));
+    assert.equal(calls[0].options.headers.get("Content-Type"), "application/json");
+    assert.equal(calls[1].options.body, JSON.stringify({ command: ":futurecommand value" }));
+});
+
+test("reports invalid command values instead of throwing or silently discarding them", async () => {
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        FETCH: async () => jsonResponse({ message: "Success" })
+    });
+    const response = await sdk.sendPrivateServerCommand([null, "  ", ":h valid"]);
+    assert.equal(response.successes, 1);
+    assert.equal(response.failures, 2);
+    assert.equal(response.failureReasons.length, 2);
+});
+
+test("honors a 429 Retry-After response and retries", async () => {
+    let calls = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        MAX_RATE_LIMIT_RETRIES: 1,
+        FETCH: async () => {
+            calls++;
+            if (calls === 1) {
+                return jsonResponse({ retry_after: 0 }, {
+                    status: 429,
+                    headers: { "Retry-After": "0", "X-RateLimit-Bucket": "global" }
+                });
+            }
+            return jsonResponse({ Name: "Test" });
+        }
+    });
+    const response = await sdk.getPrivateServerAPI();
+    assert.equal(response.Name, "Test");
+    assert.equal(calls, 2);
+});
+
+test("uses retry_after from the response body when the header is absent", async () => {
+    let calls = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        MAX_RATE_LIMIT_RETRIES: 1,
+        FETCH: async () => {
+            calls++;
+            return calls === 1
+                ? jsonResponse({ retry_after: 0 }, { status: 429 })
+                : jsonResponse({ Name: "Test" });
+        }
+    });
+    const response = await sdk.getPrivateServerAPI();
+    assert.equal(response.Name, "Test");
+    assert.equal(calls, 2);
+});
+
+test("serializes concurrent requests so learned limits cannot be raced", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        FETCH: async () => {
+            active++;
+            maximumActive = Math.max(maximumActive, active);
+            await new Promise(resolve => setTimeout(resolve, 5));
+            active--;
+            return jsonResponse({ Name: "Test" });
+        }
+    });
+    await Promise.all([sdk.getPrivateServerAPI(), sdk.getPrivateServerAPI()]);
+    assert.equal(maximumActive, 1);
+});
+
+test("preserves HTTP status, error code, headers, and response body", async () => {
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        MAX_RATE_LIMIT_RETRIES: 0,
+        FETCH: async () => jsonResponse({ code: 4001, message: "Slow down" }, {
+            status: 429,
+            headers: { "Retry-After": "5" }
+        })
+    });
+    const response = await sdk.getPrivateServerAPI();
+    assert.equal(response.error, "rate-limited");
+    assert.equal(response.status, 429);
+    assert.equal(response.code, 4001);
+    assert.equal(response.retryAfter, 5);
+    assert.equal(response.apiResponse.message, "Slow down");
+});
+
+test("normalizes network failures", async () => {
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret",
+        FETCH: async () => { throw new Error("connection failed"); }
+    });
+    const response = await sdk.getPrivateServerAPI();
+    assert.equal(response.error, "network-error");
+    assert.equal(response.cause, "connection failed");
+});
+
+test("verifies official Ed25519 webhook signing format over timestamp + raw body", () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const publicKeyBase64 = publicKey.export({ format: "der", type: "spki" }).toString("base64");
+    const rawBody = Buffer.from('{"event":"CustomCommand"}');
+    const timestamp = "1774666018";
+    const signature = sign(null, Buffer.concat([Buffer.from(timestamp), rawBody]), privateKey).toString("hex");
+    const sdk = new LibertyJS({ SERVER_KEY: "server-secret", WEBHOOK_PUBLIC_KEY: publicKeyBase64 });
+
+    assert.equal(sdk.webhook.verify({ timestamp, signature, rawBody }), true);
+    assert.equal(sdk.webhook.verify({ timestamp, signature, rawBody: Buffer.from("tampered") }), false);
+});
