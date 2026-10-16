@@ -1,4 +1,5 @@
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
+import { CommandRouter } from "./commands.js";
 
 const DEFAULT_API_URL = "https://api.erlc.gg/v2/";
 const DEFAULT_WEBHOOK_RELAY_URL = "https://api.libertytools.dev/";
@@ -37,6 +38,7 @@ export default class LibertyJS {
     #maxRateLimitRetries;
     #requestState;
     #resStatus = { forbiddenErrors: 0 };
+    commands;
 
     constructor({
         SERVER_KEY,
@@ -90,6 +92,13 @@ export default class LibertyJS {
             this.#WEBHOOK_URL = this.#normalizeBaseURL(WEBHOOK_URL || DEFAULT_WEBHOOK_RELAY_URL);
             this.#WEBHOOK_TOKEN = webhookToken;
         }
+
+        this.commands = new CommandRouter({
+            pollEvents: this.#useWebhookRelay ? options => this.webhook.events(options) : undefined,
+            sendCommands: commands => this.sendPrivateServerCommand(commands),
+            getServer: options => this.getPrivateServerAPI(options),
+            verifyWebhook: input => this.verifyWebhook(input)
+        });
     }
 
     #normalizeBaseURL(value) {
@@ -241,7 +250,7 @@ export default class LibertyJS {
             } catch (cause) {
                 return {
                     error: "network-error",
-                    message: `[LibertyJS]: Network error while fetching ${targetURL}`,
+                    message: `[LibertyJS]: Network error while fetching ${isERLC ? targetURL : "the webhook relay"}`,
                     cause: cause instanceof Error ? cause.message : String(cause)
                 };
             }
@@ -266,7 +275,7 @@ export default class LibertyJS {
 
                 return {
                     error: res.status === 429 ? "rate-limited" : "api-error",
-                    message: `[LibertyJS]: ${isERLC ? "ER:LC API" : "Webhook relay"} returned HTTP ${res.status} for ${targetURL}`,
+                    message: `[LibertyJS]: ${isERLC ? `ER:LC API returned HTTP ${res.status} for ${targetURL}` : `Webhook relay returned HTTP ${res.status}`}`,
                     status: res.status,
                     statusText: res.statusText,
                     code: data?.code,
@@ -381,25 +390,29 @@ export default class LibertyJS {
             if (!this.#useWebhookRelay) return null;
             return new URL(`webhook/${encodeURIComponent(this.#WEBHOOK_TOKEN)}`, this.#WEBHOOK_URL).toString();
         },
-        status: async () => {
+        status: async ({ signal } = {}) => {
             if (!this.#useWebhookRelay) {
                 return {
                     error: "webhook_disabled",
                     message: "[LibertyJS.webhook.status]: Webhook relay is not configured"
                 };
             }
-            return await this.#fetchAPI(new URL("health", this.#WEBHOOK_URL));
+            return await this.#fetchAPI(new URL("health", this.#WEBHOOK_URL), { signal });
         },
-        events: async () => {
+        listEvents: async ({ signal } = {}) => {
             if (!this.#useWebhookRelay) {
                 return {
                     error: "webhook_disabled",
                     message: "[LibertyJS.webhook.events]: Webhook relay is not configured"
                 };
             }
-            return await this.#fetchAPI(new URL(`webhook/${encodeURIComponent(this.#WEBHOOK_TOKEN)}/events`, this.#WEBHOOK_URL));
-        }
+            return await this.#fetchAPI(
+                new URL(`webhook/${encodeURIComponent(this.#WEBHOOK_TOKEN)}/events`, this.#WEBHOOK_URL),
+                { signal }
+            );
+        },
+        events: options => this.webhook.listEvents(options)
     };
 }
 
-export { DEFAULT_WEBHOOK_RELAY_URL, ERLC_WEBHOOK_PUBLIC_KEY };
+export { CommandRouter, DEFAULT_WEBHOOK_RELAY_URL, ERLC_WEBHOOK_PUBLIC_KEY };
