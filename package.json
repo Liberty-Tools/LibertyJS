@@ -20,7 +20,8 @@
   "scripts": {
     "test": "node --test test/index.test.js test/commands.test.js",
     "test:types": "tsc -p test/types/tsconfig.json && tsc -p test/types/tsconfig.bundler.json",
-    "check": "npm test && npm run test:types"
+    "check": "npm test && npm run test:types",
+    "example:commands": "node examples/quick-test.mjs"
   },
   "keywords": [
     "erlc",
