@@ -34,6 +34,9 @@ export default class LibertyJS {
     #WEBHOOK_URL;
     #WEBHOOK_TOKEN;
     #WEBHOOK_PUBLIC_KEY;
+    #WEBHOOK_INGEST_URL;
+    #POLL_SUBSCRIPTION_ID;
+    #POLL_TOKEN;
     #fetch;
     #maxRateLimitRetries;
     #requestState;
@@ -48,6 +51,10 @@ export default class LibertyJS {
         WEBHOOK_URL,
         WEBHOOK_TOKEN,
         WEBHOOK_ID,
+        WEBHOOK_INGEST_URL,
+        POLL_SUBSCRIPTION_ID,
+        POLL_TOKEN,
+        LIBERTY_API_URL = DEFAULT_WEBHOOK_RELAY_URL,
         WEBHOOK_PUBLIC_KEY = ERLC_WEBHOOK_PUBLIC_KEY,
         MAX_RATE_LIMIT_RETRIES = 3,
         FETCH = globalThis.fetch
@@ -65,6 +72,10 @@ export default class LibertyJS {
             throw new Error("[LibertyJS]: MAX_RATE_LIMIT_RETRIES must be a non-negative integer");
         }
         const webhookToken = this.#extractWebhookId(WEBHOOK_ID || WEBHOOK_TOKEN);
+        const usesV2Poll = Boolean(POLL_SUBSCRIPTION_ID || POLL_TOKEN);
+        if (usesV2Poll && (!POLL_SUBSCRIPTION_ID || !POLL_TOKEN || typeof POLL_SUBSCRIPTION_ID !== "string" || typeof POLL_TOKEN !== "string")) {
+            throw new Error("[LibertyJS]: POLL_SUBSCRIPTION_ID and POLL_TOKEN are both required for v2 Poll mode");
+        }
         if (WEBHOOK_ID && WEBHOOK_TOKEN && this.#extractWebhookId(WEBHOOK_ID) !== this.#extractWebhookId(WEBHOOK_TOKEN)) {
             throw new Error("[LibertyJS]: WEBHOOK_ID and WEBHOOK_TOKEN must identify the same webhook");
         }
@@ -86,15 +97,21 @@ export default class LibertyJS {
         this.#WEBHOOK_PUBLIC_KEY = WEBHOOK_PUBLIC_KEY;
         this.#fetch = FETCH;
         this.#maxRateLimitRetries = MAX_RATE_LIMIT_RETRIES;
-        this.#useWebhookRelay = Boolean(webhookToken);
+        this.#useWebhookRelay = Boolean(webhookToken || usesV2Poll);
 
-        if (this.#useWebhookRelay) {
+        if (usesV2Poll) {
+            this.#WEBHOOK_URL = this.#normalizeBaseURL(LIBERTY_API_URL);
+            this.#POLL_SUBSCRIPTION_ID = POLL_SUBSCRIPTION_ID;
+            this.#POLL_TOKEN = POLL_TOKEN;
+            if (WEBHOOK_INGEST_URL) this.#WEBHOOK_INGEST_URL = new URL(WEBHOOK_INGEST_URL).toString();
+        } else if (this.#useWebhookRelay) {
             this.#WEBHOOK_URL = this.#normalizeBaseURL(WEBHOOK_URL || DEFAULT_WEBHOOK_RELAY_URL);
             this.#WEBHOOK_TOKEN = webhookToken;
         }
 
         this.commands = new CommandRouter({
             pollEvents: this.#useWebhookRelay ? options => this.webhook.events(options) : undefined,
+            acknowledgeEvents: this.#POLL_SUBSCRIPTION_ID ? (eventIds, options) => this.webhook.acknowledge(eventIds, options) : undefined,
             sendCommands: commands => this.sendPrivateServerCommand(commands),
             getServer: options => this.getPrivateServerAPI(options),
             verifyWebhook: input => this.verifyWebhook(input)
@@ -388,6 +405,8 @@ export default class LibertyJS {
         verify: input => this.verifyWebhook(input),
         erlcUrl: () => {
             if (!this.#useWebhookRelay) return null;
+            if (this.#WEBHOOK_INGEST_URL) return this.#WEBHOOK_INGEST_URL;
+            if (this.#POLL_SUBSCRIPTION_ID) return null;
             return new URL(`webhook/${encodeURIComponent(this.#WEBHOOK_TOKEN)}`, this.#WEBHOOK_URL).toString();
         },
         status: async ({ signal } = {}) => {
@@ -406,12 +425,22 @@ export default class LibertyJS {
                     message: "[LibertyJS.webhook.events]: Webhook relay is not configured"
                 };
             }
-            return await this.#fetchAPI(
-                new URL(`webhook/${encodeURIComponent(this.#WEBHOOK_TOKEN)}/events`, this.#WEBHOOK_URL),
-                { signal }
-            );
+            const path = this.#POLL_SUBSCRIPTION_ID
+                ? `v1/poll/subscriptions/${encodeURIComponent(this.#POLL_SUBSCRIPTION_ID)}/events`
+                : `webhook/${encodeURIComponent(this.#WEBHOOK_TOKEN)}/events`;
+            return await this.#fetchAPI(new URL(path, this.#WEBHOOK_URL), {
+                signal, ...(this.#POLL_TOKEN ? { headers: { Authorization: `Bearer ${this.#POLL_TOKEN}` } } : {})
+            });
         },
-        events: options => this.webhook.listEvents(options)
+        events: options => this.webhook.listEvents(options),
+        acknowledge: async (eventIds, { signal } = {}) => {
+            if (!this.#POLL_SUBSCRIPTION_ID || !this.#POLL_TOKEN) return {
+                error: "webhook_disabled", message: "[LibertyJS.webhook.acknowledge]: v2 Poll mode is not configured"
+            };
+            return await this.#fetchAPI(new URL(`v1/poll/subscriptions/${encodeURIComponent(this.#POLL_SUBSCRIPTION_ID)}/events/acknowledge`, this.#WEBHOOK_URL), {
+                method: "POST", signal, headers: { Authorization: `Bearer ${this.#POLL_TOKEN}` }, body: { eventIds }
+            });
+        }
     };
 }
 

@@ -106,6 +106,27 @@ test("Poll mode resolves the triggering player and sends one private message", a
     assert.equal(commandCalls[0].options.body, JSON.stringify({ command: ":pm Builder Line one line two" }));
 });
 
+test("v2 Poll mode acknowledges an event after its command handler completes", async () => {
+    const calls = [];
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret", POLL_SUBSCRIPTION_ID: "sub_1", POLL_TOKEN: "ltp_token",
+        FETCH: async (url, options) => {
+            calls.push({ url: url.toString(), options });
+            if (url.toString().endsWith("/events")) return jsonResponse({ events: [customCommand({ id: "event-1" })] });
+            if (url.toString().endsWith("/acknowledge")) return jsonResponse({ acknowledged: ["event-1"] });
+            return jsonResponse({ message: "Success" });
+        }
+    });
+    sdk.commands.command("help", () => "done");
+    const handled = new Promise(resolve => sdk.commands.once("handled", resolve));
+    await sdk.commands.start({ pollInterval: 100 });
+    await handled;
+    await sdk.commands.stop();
+    const acknowledge = calls.find(call => call.url.endsWith("/acknowledge"));
+    assert.ok(acknowledge);
+    assert.equal(acknowledge.options.body, JSON.stringify({ eventIds: ["event-1"] }));
+});
+
 test("reply fails safely when the triggering player is unavailable", async () => {
     const sdk = new LibertyJS({
         SERVER_KEY: "server-secret",

@@ -327,8 +327,31 @@ for application logging and metrics. A handler failure does not stop other comma
 
 ### Relay configuration options
 
+For new Gateway v2 connections, create a Poll client in the dashboard and use
+the subscription ID and one-time token it shows:
+
+```js
+const erlc = new LibertyJS({
+    SERVER_KEY: process.env.ERLC_SERVER_KEY,
+    WEBHOOK_INGEST_URL: process.env.WEBHOOK_INGEST_URL,
+    POLL_SUBSCRIPTION_ID: process.env.POLL_SUBSCRIPTION_ID,
+    POLL_TOKEN: process.env.POLL_TOKEN
+});
+
+erlc.commands.command("help", context => context.reply("How can we help?"));
+await erlc.commands.start();
+```
+
+LibertyJS acknowledges each v2 event after its handler completes. Each Poll
+subscription has an independent acknowledgement cursor, so multiple bots can
+consume the same connection without hiding events from one another.
+
 | Option | Required | Description |
 | --- | --- | --- |
+| `POLL_SUBSCRIPTION_ID` | Yes for v2 Poll | Poll client ID from the dashboard. |
+| `POLL_TOKEN` | Yes for v2 Poll | One-time Poll credential from the dashboard. |
+| `WEBHOOK_INGEST_URL` | No | Full ER:LC ingest URL, used by `webhook.erlcUrl()`. |
+| `LIBERTY_API_URL` | No | Gateway base URL; defaults to `https://api.libertytools.dev/`. |
 | `WEBHOOK_ID` | Yes for relay methods | Dashboard webhook ID or complete ER:LC webhook URL. |
 | `WEBHOOK_URL` | No | Relay base URL; defaults to `https://api.libertytools.dev/`. Use this for a self-hosted relay. |
 | `WEBHOOK_TOKEN` | No | Backward-compatible alias for `WEBHOOK_ID`. |

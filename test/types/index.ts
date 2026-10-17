@@ -11,6 +11,11 @@ const sdk = new LibertyJS({
     WEBHOOK_ID: "test", WEBHOOK_TOKEN: "test", WEBHOOK_PUBLIC_KEY: ERLC_WEBHOOK_PUBLIC_KEY,
     MAX_RATE_LIMIT_RETRIES: 0, FETCH: async () => new Response("null")
 });
+const v2PollSdk = new LibertyJS({
+    SERVER_KEY: "test-only", POLL_SUBSCRIPTION_ID: "sub_1", POLL_TOKEN: "ltp_token",
+    WEBHOOK_INGEST_URL: "https://api.example.test/v1/ingest/pub_1"
+});
+await v2PollSdk.webhook.acknowledge(["evt_1"]);
 const options: ServerOption[] = ["Players", "Staff", "JoinLogs", "Queue", "KillLogs",
     "CommandLogs", "ModCalls", "EmergencyCalls", "Vehicles"];
 const raw: unknown = await sdk.getPrivateServerAPI(options);

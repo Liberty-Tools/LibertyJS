@@ -144,6 +144,7 @@ export class CommandRouter extends EventEmitter {
     #seenEvents = new Set();
     #seenOrder = [];
     #pollEvents;
+    #acknowledgeEvents;
     #sendCommands;
     #getServer;
     #verifyWebhook;
@@ -154,9 +155,10 @@ export class CommandRouter extends EventEmitter {
     #maxSeenEvents;
     #playerCache = new Map();
 
-    constructor({ pollEvents, sendCommands, getServer, verifyWebhook, maxSeenEvents = DEFAULT_MAX_SEEN_EVENTS } = {}) {
+    constructor({ pollEvents, acknowledgeEvents, sendCommands, getServer, verifyWebhook, maxSeenEvents = DEFAULT_MAX_SEEN_EVENTS } = {}) {
         super();
         this.#pollEvents = pollEvents;
+        this.#acknowledgeEvents = acknowledgeEvents;
         this.#sendCommands = sendCommands;
         this.#getServer = getServer;
         this.#verifyWebhook = verifyWebhook;
@@ -381,9 +383,17 @@ export class CommandRouter extends EventEmitter {
                                 error: new Error("[LibertyJS.commands]: Poll response did not include an events array")
                             });
                         } else {
+                            const acknowledged = [];
                             for (const event of events) {
                                 if (signal.aborted) break;
                                 await this.handle(event);
+                                if (event && typeof event === "object" && typeof event.id === "string") acknowledged.push(event.id);
+                            }
+                            if (acknowledged.length && typeof this.#acknowledgeEvents === "function") {
+                                const result = await this.#acknowledgeEvents(acknowledged, { signal });
+                                if (result?.error) this.emit("pollError", {
+                                    error: new Error(`[LibertyJS.commands]: Poll acknowledgement failed (${result.error})`)
+                                });
                             }
                         }
                     }

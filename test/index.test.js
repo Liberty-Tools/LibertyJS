@@ -254,3 +254,25 @@ test("accepts a full dashboard ER:LC webhook URL", () => {
     });
     assert.equal(sdk.webhook.erlcUrl(), "https://api.libertytools.dev/webhook/url-webhook-id");
 });
+
+test("supports v2 Poll subscriptions with bearer auth and acknowledgements", async () => {
+    const calls = [];
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret", LIBERTY_API_URL: "https://api.libertytools.dev/",
+        WEBHOOK_INGEST_URL: "https://api.libertytools.dev/v1/ingest/pub_123",
+        POLL_SUBSCRIPTION_ID: "sub_123", POLL_TOKEN: "ltp_secret",
+        FETCH: async (url, options) => {
+            calls.push({ url: url.toString(), options });
+            return jsonResponse(options.method === "POST" ? { acknowledged: ["evt_1"] } : { events: [{ id: "evt_1" }] });
+        }
+    });
+    assert.equal(sdk.webhook.erlcUrl(), "https://api.libertytools.dev/v1/ingest/pub_123");
+    await sdk.webhook.events();
+    await sdk.webhook.acknowledge(["evt_1"]);
+    assert.deepEqual(calls.map(call => call.url), [
+        "https://api.libertytools.dev/v1/poll/subscriptions/sub_123/events",
+        "https://api.libertytools.dev/v1/poll/subscriptions/sub_123/events/acknowledge"
+    ]);
+    assert.equal(calls[0].options.headers.get("Authorization"), "Bearer ltp_secret");
+    assert.equal(calls[1].options.body, JSON.stringify({ eventIds: ["evt_1"] }));
+});

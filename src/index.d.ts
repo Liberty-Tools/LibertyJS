@@ -14,6 +14,14 @@ export interface LibertyJSOptions {
     /** Alias for WEBHOOK_ID. */
     WEBHOOK_TOKEN?: string;
     WEBHOOK_ID?: string;
+    /** Full ER:LC ingest URL shown by the Liberty Tools dashboard. */
+    WEBHOOK_INGEST_URL?: string;
+    /** v2 Poll subscription ID shown by the dashboard. */
+    POLL_SUBSCRIPTION_ID?: string;
+    /** One-time v2 Poll token shown by the dashboard. */
+    POLL_TOKEN?: string;
+    /** Liberty Tools API base URL. */
+    LIBERTY_API_URL?: string;
     /** Base64 DER/SPKI Ed25519 public key. */
     WEBHOOK_PUBLIC_KEY?: string;
     MAX_RATE_LIMIT_RETRIES?: number;
@@ -87,6 +95,8 @@ export interface WebhookMethods {
     listEvents(options?: { signal?: AbortSignal }): Promise<unknown>;
     /** Poll-mode relay JSON, an SDK error, or null for an empty body. */
     events(options?: { signal?: AbortSignal }): Promise<unknown>;
+    /** Acknowledge processed v2 Poll events. */
+    acknowledge(eventIds: string[], options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 export interface CustomCommandEvent {
@@ -148,6 +158,7 @@ export type CommandHandler = (context: CommandContext) => unknown | Promise<unkn
 export class CommandRouter extends EventEmitter {
     constructor(options?: {
         pollEvents?: (options?: { signal?: AbortSignal }) => Promise<unknown>;
+        acknowledgeEvents?: (eventIds: string[], options?: { signal?: AbortSignal }) => Promise<unknown>;
         sendCommands?: (commands: string[]) => Promise<CommandActionResult>;
         getServer?: (options: ServerOption[]) => Promise<unknown>;
         verifyWebhook?: (input?: WebhookVerificationInput) => boolean;
