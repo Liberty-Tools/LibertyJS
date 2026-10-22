@@ -1,19 +1,27 @@
 {
   "name": "@libertytools/libertyjs",
-  "version": "1.2.0",
+  "version": "1.3.0-beta.1",
   "description": "An SDK to help developers create apps for the ER:LC Private Server API.",
   "author": "novix",
   "license": "ISC",
   "type": "module",
   "main": "./src/index.js",
+  "types": "./src/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
   },
   "files": [
-    "src"
+    "src",
+    "examples"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/index.test.js test/commands.test.js",
+    "test:types": "tsc -p test/types/tsconfig.json && tsc -p test/types/tsconfig.bundler.json",
+    "check": "npm test && npm run test:types",
+    "example:commands": "node examples/quick-test.mjs"
   },
   "keywords": [
     "erlc",
@@ -26,5 +34,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Liberty-Tools/LibertyJS.git"
+  },
+  "devDependencies": {
+    "@types/node": "18.19.130",
+    "typescript": "5.7.3"
   }
 }
