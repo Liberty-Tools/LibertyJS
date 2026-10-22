@@ -154,6 +154,7 @@ export class CommandRouter extends EventEmitter {
     #externalAbortCleanup;
     #maxSeenEvents;
     #playerCache = new Map();
+    #cooldownChecks = 0;
 
     constructor({ pollEvents, acknowledgeEvents, sendCommands, getServer, verifyWebhook, maxSeenEvents = DEFAULT_MAX_SEEN_EVENTS } = {}) {
         super();
@@ -209,7 +210,13 @@ export class CommandRouter extends EventEmitter {
 
         const cooldownKey = `${event.command}:${event.userId || "unknown"}`;
         const now = Date.now();
+        if (++this.#cooldownChecks % 100 === 0) {
+            for (const [key, expiresAt] of this.#cooldowns) {
+                if (expiresAt <= now) this.#cooldowns.delete(key);
+            }
+        }
         const availableAt = this.#cooldowns.get(cooldownKey) ?? 0;
+        if (availableAt <= now) this.#cooldowns.delete(cooldownKey);
         if (availableAt > now) {
             const result = {
                 status: "cooldown",
@@ -280,7 +287,6 @@ export class CommandRouter extends EventEmitter {
             throw new Error("[LibertyJS.commands]: timeout must be a non-negative number of milliseconds");
         }
         if (!this.#running && !this.#loopPromise) return;
-        this.#running = false;
         this.#controller?.abort();
         this.#externalAbortCleanup?.();
         this.#externalAbortCleanup = undefined;
@@ -332,7 +338,8 @@ export class CommandRouter extends EventEmitter {
 
     async #reply(event, value) {
         const message = sanitizeMessage(value);
-        const username = safeUsername(event.username) || await this.#resolveUsername(event.userId);
+        // The signed event's display name can be stale; the user ID identifies the player.
+        const username = await this.#resolveUsername(event.userId);
         if (!username) {
             return {
                 error: "player_not_found",
@@ -373,6 +380,7 @@ export class CommandRouter extends EventEmitter {
             while (!signal.aborted) {
                 try {
                     const response = await this.#pollEvents({ signal });
+                    if (signal.aborted) break;
                     if (response?.error) {
                         const error = new Error(`[LibertyJS.commands]: Poll request failed (${response.error})`);
                         this.emit("pollError", { error });
@@ -391,14 +399,14 @@ export class CommandRouter extends EventEmitter {
                             }
                             if (acknowledged.length && typeof this.#acknowledgeEvents === "function") {
                                 const result = await this.#acknowledgeEvents(acknowledged, { signal });
-                                if (result?.error) this.emit("pollError", {
+                                if (result?.error && !signal.aborted) this.emit("pollError", {
                                     error: new Error(`[LibertyJS.commands]: Poll acknowledgement failed (${result.error})`)
                                 });
                             }
                         }
                     }
                 } catch (error) {
-                    this.emit("pollError", { error });
+                    if (!signal.aborted) this.emit("pollError", { error });
                 }
                 if (!signal.aborted) await abortableWait(pollInterval, signal);
             }

@@ -165,7 +165,7 @@ When ER:LC returns `429`, LibertyJS waits for `Retry-After` (falling back to `re
 
 ## Official ER:LC event webhooks
 
-ER:LC signs `timestamp + raw_body` with Ed25519. Pass the exact raw request bytes; do not parse and re-serialize the JSON before verification.
+ER:LC signs `timestamp + raw_body` with Ed25519. Pass the exact raw request bytes; do not parse and re-serialize the JSON before verification. Verification also rejects timestamps more than five minutes from the current time; keep the host clock synchronized.
 
 ```js
 const valid = erlc.webhook.verify({

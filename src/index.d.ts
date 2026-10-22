@@ -50,7 +50,6 @@ export interface HTTPError {
 export type LibertyError = HTTPError | {
     error: "network-error";
     message: string;
-    cause: string;
 } | {
     error: "forbidden";
     message: string;

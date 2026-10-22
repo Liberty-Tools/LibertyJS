@@ -190,7 +190,7 @@ test("normalizes network failures", async () => {
     });
     const response = await sdk.getPrivateServerAPI();
     assert.equal(response.error, "network-error");
-    assert.equal(response.cause, "connection failed");
+    assert.equal(response.cause, undefined);
 });
 
 test("stops after repeated invalid global API key responses", async () => {
@@ -216,12 +216,15 @@ test("verifies official Ed25519 webhook signing format over timestamp + raw body
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     const publicKeyBase64 = publicKey.export({ format: "der", type: "spki" }).toString("base64");
     const rawBody = Buffer.from('{"event":"CustomCommand"}');
-    const timestamp = "1774666018";
+    const timestamp = String(Math.floor(Date.now() / 1_000));
     const signature = sign(null, Buffer.concat([Buffer.from(timestamp), rawBody]), privateKey).toString("hex");
     const sdk = new LibertyJS({ SERVER_KEY: "server-secret", WEBHOOK_PUBLIC_KEY: publicKeyBase64 });
 
     assert.equal(sdk.webhook.verify({ timestamp, signature, rawBody }), true);
     assert.equal(sdk.webhook.verify({ timestamp, signature, rawBody: Buffer.from("tampered") }), false);
+    const oldTimestamp = String(Math.floor(Date.now() / 1_000) - 600);
+    const oldSignature = sign(null, Buffer.concat([Buffer.from(oldTimestamp), rawBody]), privateKey).toString("hex");
+    assert.equal(sdk.webhook.verify({ timestamp: oldTimestamp, signature: oldSignature, rawBody }), false);
 });
 
 test("integrates directly with Liberty Tools dashboard webhook IDs", async () => {

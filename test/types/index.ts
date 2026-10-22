@@ -67,7 +67,7 @@ const removed: boolean = sdk.commands.remove("help");
 const standalone: CommandRouter = new CommandRouter({ maxSeenEvents: 10 });
 standalone.command("test", () => undefined);
 function errorDetails(error: LibertyError): unknown {
-    if (error.error === "network-error") return error.cause;
+    if (error.error === "network-error") return error.message;
     if (error.error === "api-error" || error.error === "rate-limited") return error.headers;
     return error.message;
 }

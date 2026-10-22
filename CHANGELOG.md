@@ -17,6 +17,9 @@
 ### Changed
 
 - Webhook relay error messages no longer include credential-bearing request URLs
+- Signed webhook verification rejects stale timestamps; private replies resolve the triggering player ID
+- Poll shutdown avoids overlapping loops and ignores expected abort errors
+- Network errors omit the underlying cause because custom fetch errors can contain credentials
 - Package version set to `1.3.0-beta.1` for live testing before a stable release
 
 ### Compatibility

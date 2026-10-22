@@ -175,6 +175,18 @@ test("reply refuses unsafe player names", async () => {
     assert.equal(commandSent, false);
 });
 
+test("reply targets the triggering user ID even if the event username is stale", async () => {
+    let sent;
+    const router = new CommandRouter({
+        getServer: async () => ({ Players: [{ Player: "CurrentPlayer:123" }] }),
+        sendCommands: async commands => { sent = commands[0]; return { successes: 1 }; }
+    });
+    router.command("help", context => context.reply("Hello"));
+    const result = await router.handle(customCommand({ username: "OtherPlayer" }));
+    assert.equal(result.status, "handled");
+    assert.equal(sent, ":pm CurrentPlayer Hello");
+});
+
 test("announce sends a sanitized server hint command", async () => {
     let body;
     const sdk = new LibertyJS({
@@ -195,7 +207,7 @@ test("handles a directly signed official webhook", async () => {
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     const publicKeyBase64 = publicKey.export({ format: "der", type: "spki" }).toString("base64");
     const rawBody = Buffer.from(JSON.stringify(customCommand()));
-    const timestamp = "1792162000";
+    const timestamp = String(Math.floor(Date.now() / 1_000));
     const signature = sign(null, Buffer.concat([Buffer.from(timestamp), rawBody]), privateKey).toString("hex");
     const sdk = new LibertyJS({ SERVER_KEY: "server-secret", WEBHOOK_PUBLIC_KEY: publicKeyBase64 });
     let handled = false;
@@ -208,6 +220,10 @@ test("handles a directly signed official webhook", async () => {
         await sdk.commands.handleWebhook({ timestamp, signature: "00", rawBody }),
         { status: "rejected", reason: "invalid_signature" }
     );
+    const oldTimestamp = String(Math.floor(Date.now() / 1_000) - 600);
+    const oldSignature = sign(null, Buffer.concat([Buffer.from(oldTimestamp), rawBody]), privateKey).toString("hex");
+    assert.deepEqual(await sdk.commands.handleWebhook({ timestamp: oldTimestamp, signature: oldSignature, rawBody }),
+        { status: "rejected", reason: "invalid_signature" });
 });
 
 test("handler failures are reported without throwing from the router", async () => {
@@ -230,6 +246,17 @@ test("webhook relay errors do not expose the webhook ID", async () => {
     });
     const result = await sdk.webhook.events();
     assert.equal(result.status, 500);
+    assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
+test("webhook relay network failures do not expose a URL embedded in the cause", async () => {
+    const secret = "private-relay-token";
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret", WEBHOOK_ID: secret,
+        FETCH: async url => { throw new Error(`Failed to fetch ${url}`); }
+    });
+    const result = await sdk.webhook.events();
+    assert.equal(result.error, "network-error");
     assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
@@ -272,6 +299,7 @@ test("stop aborts an in-flight Poll fetch", async () => {
     let startFetch;
     const fetchStarted = new Promise(resolve => { startFetch = resolve; });
     let aborted = false;
+    let pollErrors = 0;
     const sdk = new LibertyJS({
         SERVER_KEY: "abort-server-secret",
         WEBHOOK_ID: "abort-webhook",
@@ -285,12 +313,40 @@ test("stop aborts an in-flight Poll fetch", async () => {
             });
         }
     });
+    sdk.commands.on("pollError", () => { pollErrors++; });
 
     await sdk.commands.start({ pollInterval: 100 });
     await fetchStarted;
     await sdk.commands.stop();
     assert.equal(aborted, true);
     assert.equal(sdk.commands.running, false);
+    assert.equal(pollErrors, 0);
+});
+
+test("a timed-out stop cannot start an overlapping Poll loop", async () => {
+    let firstPollStarted;
+    const started = new Promise(resolve => { firstPollStarted = resolve; });
+    let releaseFirst;
+    let polls = 0;
+    const router = new CommandRouter({ pollEvents: async () => {
+        polls++;
+        if (polls === 1) {
+            firstPollStarted();
+            return await new Promise(resolve => { releaseFirst = resolve; });
+        }
+        return { events: [] };
+    } });
+    await router.start({ pollInterval: 1_000 });
+    await started;
+    await assert.rejects(router.stop({ timeout: 10 }), /Timed out/);
+    await router.start();
+    assert.equal(polls, 1);
+    releaseFirst({ events: [] });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(router.running, false);
+    await router.start({ pollInterval: 1_000 });
+    assert.equal(polls, 2);
+    await router.stop();
 });
 
 test("validates command registration and outgoing messages", async () => {

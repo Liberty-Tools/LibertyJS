@@ -264,11 +264,10 @@ export default class LibertyJS {
             let res;
             try {
                 res = await this.#fetch(targetURL, { ...options, method, headers, body });
-            } catch (cause) {
+            } catch {
                 return {
                     error: "network-error",
-                    message: `[LibertyJS]: Network error while fetching ${isERLC ? targetURL : "the webhook relay"}`,
-                    cause: cause instanceof Error ? cause.message : String(cause)
+                    message: `[LibertyJS]: Network error while fetching ${isERLC ? targetURL : "the webhook relay"}`
                 };
             }
 
@@ -378,6 +377,10 @@ export default class LibertyJS {
 
     verifyWebhook({ timestamp, signature, rawBody, publicKey = this.#WEBHOOK_PUBLIC_KEY } = {}) {
         if (typeof timestamp !== "string" || !timestamp) return false;
+        const timestampNumber = Number(timestamp);
+        if (!Number.isFinite(timestampNumber)) return false;
+        const timestampMs = timestampNumber > 10_000_000_000 ? timestampNumber : timestampNumber * 1_000;
+        if (Math.abs(Date.now() - timestampMs) > 5 * 60_000) return false;
         if (typeof signature !== "string" || !/^[0-9a-f]+$/i.test(signature) || signature.length % 2 !== 0) {
             return false;
         }
