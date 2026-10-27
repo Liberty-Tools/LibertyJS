@@ -47,6 +47,7 @@ sdk.verifyWebhook();
 await sdk.webhook.status();
 await sdk.webhook.events();
 await sdk.webhook.listEvents({ signal: new AbortController().signal });
+await v2PollSdk.webhook.listEvents({ cursor: "opaque", limit: 100 });
 sdk.commands.command(";help", async (context: CommandContext) => {
     const command: string = context.command;
     const argument: string = context.argument;
@@ -88,3 +89,5 @@ sdk.webhook.verify({ rawBody: { event: "CustomCommand" } });
 sdk.commands.command("help", "reply");
 // @ts-expect-error Cooldown must be numeric
 sdk.commands.command("help", () => undefined, { cooldown: "10s" });
+// @ts-expect-error Poll page size must be numeric
+v2PollSdk.webhook.events({ limit: "50" });

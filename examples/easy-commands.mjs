@@ -1,11 +1,11 @@
 import LibertyJS from "@libertytools/libertyjs";
 
-const { SERVER_KEY, LIBERTYTOOLS_WEBHOOK_ID } = process.env;
-if (!SERVER_KEY || !LIBERTYTOOLS_WEBHOOK_ID) {
-    throw new Error("Set SERVER_KEY and LIBERTYTOOLS_WEBHOOK_ID before starting this example");
+const { ERLC_SERVER_KEY, POLL_SUBSCRIPTION_ID, POLL_TOKEN } = process.env;
+if (!ERLC_SERVER_KEY || !POLL_SUBSCRIPTION_ID || !POLL_TOKEN) {
+    throw new Error("Set ERLC_SERVER_KEY, POLL_SUBSCRIPTION_ID, and POLL_TOKEN before starting this example");
 }
 
-const erlc = new LibertyJS({ SERVER_KEY, WEBHOOK_ID: LIBERTYTOOLS_WEBHOOK_ID });
+const erlc = new LibertyJS({ SERVER_KEY: ERLC_SERVER_KEY, POLL_SUBSCRIPTION_ID, POLL_TOKEN });
 
 erlc.commands.command("help", async context => {
     const result = await context.reply(

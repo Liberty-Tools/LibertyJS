@@ -90,10 +90,10 @@ export interface WebhookMethods {
     erlcUrl(): string | null;
     /** Unvalidated relay JSON, an SDK error, or null for an empty body. */
     status(options?: { signal?: AbortSignal }): Promise<unknown>;
-    /** One page of unvalidated Poll-mode relay JSON. */
-    listEvents(options?: { signal?: AbortSignal }): Promise<unknown>;
+    /** One page of unvalidated Poll-mode relay JSON. The v2 gateway accepts cursor and limit (1-100). */
+    listEvents(options?: { signal?: AbortSignal; cursor?: string; limit?: number }): Promise<unknown>;
     /** Poll-mode relay JSON, an SDK error, or null for an empty body. */
-    events(options?: { signal?: AbortSignal }): Promise<unknown>;
+    events(options?: { signal?: AbortSignal; cursor?: string; limit?: number }): Promise<unknown>;
     /** Acknowledge processed v2 Poll events. */
     acknowledge(eventIds: string[], options?: { signal?: AbortSignal }): Promise<unknown>;
 }
@@ -156,7 +156,7 @@ export type CommandHandler = (context: CommandContext) => unknown | Promise<unkn
 
 export class CommandRouter extends EventEmitter {
     constructor(options?: {
-        pollEvents?: (options?: { signal?: AbortSignal }) => Promise<unknown>;
+        pollEvents?: (options?: { signal?: AbortSignal; cursor?: string }) => Promise<unknown>;
         acknowledgeEvents?: (eventIds: string[], options?: { signal?: AbortSignal }) => Promise<unknown>;
         sendCommands?: (commands: string[]) => Promise<CommandActionResult>;
         getServer?: (options: ServerOption[]) => Promise<unknown>;

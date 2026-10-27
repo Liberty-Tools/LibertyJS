@@ -1,20 +1,22 @@
 import LibertyJS from "@libertytools/libertyjs";
 
 // PowerShell setup:
-//   $env:SERVER_KEY="your ER:LC server key"
-//   $env:LIBERTYTOOLS_WEBHOOK_ID="your Liberty Tools Poll webhook ID"
+//   $env:ERLC_SERVER_KEY="your ER:LC server key"
+//   $env:POLL_SUBSCRIPTION_ID="your dashboard Poll subscription ID"
+//   $env:POLL_TOKEN="your dashboard Poll token"
 //   npm run example:commands
 
-const { SERVER_KEY, LIBERTYTOOLS_WEBHOOK_ID } = process.env;
+const { ERLC_SERVER_KEY, POLL_SUBSCRIPTION_ID, POLL_TOKEN } = process.env;
 
-if (!SERVER_KEY || !LIBERTYTOOLS_WEBHOOK_ID) {
-    console.error("Missing SERVER_KEY or LIBERTYTOOLS_WEBHOOK_ID.");
-    console.error("Set both environment variables using the commands at the top of this file.");
+if (!ERLC_SERVER_KEY || !POLL_SUBSCRIPTION_ID || !POLL_TOKEN) {
+    console.error("Missing ERLC_SERVER_KEY, POLL_SUBSCRIPTION_ID, or POLL_TOKEN.");
+    console.error("Create a Poll client in Dashboard → Outputs, then set the three environment variables above.");
     process.exitCode = 1;
 } else {
     const erlc = new LibertyJS({
-        SERVER_KEY,
-        WEBHOOK_ID: LIBERTYTOOLS_WEBHOOK_ID
+        SERVER_KEY: ERLC_SERVER_KEY,
+        POLL_SUBSCRIPTION_ID,
+        POLL_TOKEN
     });
 
     erlc.commands.command("libertytest", async context => {

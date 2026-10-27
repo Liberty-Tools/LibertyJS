@@ -238,6 +238,10 @@ export class CommandRouter extends EventEmitter {
             this.emit("handled", result);
             return result;
         } catch (error) {
+            // A failed handler must remain eligible for a later Poll delivery.
+            this.#seenEvents.delete(event.id);
+            const seenIndex = this.#seenOrder.indexOf(event.id);
+            if (seenIndex !== -1) this.#seenOrder.splice(seenIndex, 1);
             const result = { status: "failed", eventId: event.id, command: event.command, error };
             this.emit("commandError", result);
             return result;
@@ -376,14 +380,19 @@ export class CommandRouter extends EventEmitter {
     }
 
     async #pollLoop(pollInterval, signal) {
+        let cursor;
         try {
             while (!signal.aborted) {
+                let wait = pollInterval;
                 try {
-                    const response = await this.#pollEvents({ signal });
+                    const response = await this.#pollEvents({ signal, cursor });
                     if (signal.aborted) break;
                     if (response?.error) {
                         const error = new Error(`[LibertyJS.commands]: Poll request failed (${response.error})`);
                         this.emit("pollError", { error });
+                        if (response.error === "rate-limited" && Number.isFinite(response.retryAfter)) {
+                            wait = Math.max(wait, response.retryAfter * 1_000);
+                        }
                     } else {
                         const events = Array.isArray(response) ? response : response?.events;
                         if (!Array.isArray(events)) {
@@ -394,8 +403,10 @@ export class CommandRouter extends EventEmitter {
                             const acknowledged = [];
                             for (const event of events) {
                                 if (signal.aborted) break;
-                                await this.handle(event);
-                                if (event && typeof event === "object" && typeof event.id === "string") acknowledged.push(event.id);
+                                const result = await this.handle(event);
+                                if (result.status !== "failed" && event && typeof event === "object" && typeof event.id === "string") {
+                                    acknowledged.push(event.id);
+                                }
                             }
                             if (acknowledged.length && typeof this.#acknowledgeEvents === "function") {
                                 const result = await this.#acknowledgeEvents(acknowledged, { signal });
@@ -403,12 +414,14 @@ export class CommandRouter extends EventEmitter {
                                     error: new Error(`[LibertyJS.commands]: Poll acknowledgement failed (${result.error})`)
                                 });
                             }
+                            cursor = response?.hasMore && typeof response.nextCursor === "string"
+                                ? response.nextCursor : undefined;
                         }
                     }
                 } catch (error) {
                     if (!signal.aborted) this.emit("pollError", { error });
                 }
-                if (!signal.aborted) await abortableWait(pollInterval, signal);
+                if (!signal.aborted) await abortableWait(wait, signal);
             }
         } finally {
             this.#running = false;

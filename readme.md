@@ -242,7 +242,13 @@ if (response?.error) {
 }
 ```
 
-The v2 response includes `events` and Poll backlog information. Acknowledge events after successful processing; `commands.start()` does this for handled v2 events. Current event types include custom in-game commands and emergency calls.
+The v2 response includes `events`, `nextCursor`, `hasMore`, `pendingCount`,
+`oldestPendingAt`, and `droppedCount`. Call `webhook.listEvents({ cursor, limit })`
+to read another page (limit 1–100). Acknowledge events after successful processing;
+`commands.start()` follows pages and acknowledges completed v2 events. Current
+event types include custom in-game commands and emergency calls. Check
+`droppedCount` after reconnecting: it rises when old pending events expire or the
+subscription reaches its 5,000-event cap.
 
 ## Easy command handlers
 
@@ -271,10 +277,19 @@ await erlc.commands.start();
 ```
 
 A complete runnable version is available in `examples/easy-commands.mjs`.
+For a short in-game smoke test, set `ERLC_SERVER_KEY`, `POLL_SUBSCRIPTION_ID`,
+and `POLL_TOKEN`, then run `npm run example:commands` and enter `;libertytest`.
 
 `commands.start()` performs an immediate Poll request, handles returned events in
-order, then waits two seconds before polling again. It prevents overlapping Poll
-requests and ignores event IDs it has already handled in the current process.
+order, then waits two seconds before polling again. It follows the gateway cursor
+to reach later pages and prevents overlapping Poll requests. It ignores event IDs
+it has already handled in the current process. If a handler throws, the event is
+left pending and can be retried on the next pass; successful, unhandled, and
+cooldown events are acknowledged. If you call `reply()` or `announce()`, inspect
+their returned result and throw from the handler when you want a failed action
+retried. Make external side effects idempotent because an acknowledgement can fail
+after your handler succeeds. Gateway rate limits are respected using `Retry-After`;
+stopping the bot cancels the wait.
 
 Stop gracefully during application shutdown:
 

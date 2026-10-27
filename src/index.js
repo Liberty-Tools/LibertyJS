@@ -154,8 +154,17 @@ export default class LibertyJS {
         return new URL(this.#stripLeadingSlashes(path), this.#PRIVATE_SERVER_API);
     }
 
-    #wait(milliseconds) {
-        return new Promise(resolve => setTimeout(resolve, milliseconds));
+    #wait(milliseconds, signal) {
+        if (signal?.aborted) return Promise.resolve();
+        return new Promise(resolve => {
+            const timer = setTimeout(done, milliseconds);
+            function done() {
+                clearTimeout(timer);
+                signal?.removeEventListener("abort", done);
+                resolve();
+            }
+            signal?.addEventListener("abort", done, { once: true });
+        });
     }
 
     #headersToObject(headers) {
@@ -222,6 +231,12 @@ export default class LibertyJS {
     }
 
     async #fetchAPI(url, options = {}) {
+        // Only ER:LC requests share a rate-limit queue. A slow Poll retry must
+        // never block an unrelated command sent to the official API.
+        const targetURL = url instanceof URL ? url : new URL(url);
+        if (targetURL.origin !== new URL(DEFAULT_API_URL).origin) {
+            return await this.#performFetchAPI(targetURL, options);
+        }
         const request = this.#requestState.requestQueue.then(
             () => this.#performFetchAPI(url, options),
             () => this.#performFetchAPI(url, options)
@@ -259,6 +274,9 @@ export default class LibertyJS {
         }
 
         for (let attempt = 0; attempt <= this.#maxRateLimitRetries; attempt++) {
+            if (options.signal?.aborted) return {
+                error: "network-error", message: "[LibertyJS]: Request aborted"
+            };
             if (isERLC) await this.#waitForKnownLimit(routeKey);
 
             let res;
@@ -281,7 +299,7 @@ export default class LibertyJS {
             if (isERLC) this.#readRateLimit(res, routeKey);
 
             if (res.status === 429 && attempt < this.#maxRateLimitRetries) {
-                await this.#wait(this.#retryAfterMilliseconds(res, data));
+                await this.#wait(this.#retryAfterMilliseconds(res, data), options.signal);
                 continue;
             }
 
@@ -421,17 +439,25 @@ export default class LibertyJS {
             }
             return await this.#fetchAPI(new URL("health", this.#WEBHOOK_URL), { signal });
         },
-        listEvents: async ({ signal } = {}) => {
+        listEvents: async ({ signal, cursor, limit } = {}) => {
             if (!this.#useWebhookRelay) {
                 return {
                     error: "webhook_disabled",
                     message: "[LibertyJS.webhook.events]: Webhook relay is not configured"
                 };
             }
+            if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+                throw new RangeError("[LibertyJS.webhook.listEvents]: limit must be an integer from 1 to 100");
+            }
             const path = this.#POLL_SUBSCRIPTION_ID
                 ? `v1/poll/subscriptions/${encodeURIComponent(this.#POLL_SUBSCRIPTION_ID)}/events`
                 : `webhook/${encodeURIComponent(this.#WEBHOOK_TOKEN)}/events`;
-            return await this.#fetchAPI(new URL(path, this.#WEBHOOK_URL), {
+            const url = new URL(path, this.#WEBHOOK_URL);
+            if (this.#POLL_SUBSCRIPTION_ID) {
+                if (cursor) url.searchParams.set("cursor", cursor);
+                if (limit !== undefined) url.searchParams.set("limit", String(limit));
+            }
+            return await this.#fetchAPI(url, {
                 signal, ...(this.#POLL_TOKEN ? { headers: { Authorization: `Bearer ${this.#POLL_TOKEN}` } } : {})
             });
         },

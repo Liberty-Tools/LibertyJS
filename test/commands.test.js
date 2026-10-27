@@ -38,6 +38,21 @@ test("registers semicolon commands and provides a normalized handler context", a
     assert.equal(received.serverId, "server-1");
 });
 
+test("routes the current gateway's normalized CustomCommand envelope", async () => {
+    const router = new CommandRouter();
+    let context;
+    router.command("help", value => { context = value; });
+    const result = await router.handle({
+        id: "evt_gateway", type: "CustomCommand", serverId: "server-1",
+        occurredAt: "2026-10-27T12:00:00.000Z", receivedAt: "2026-10-27T12:00:01.000Z",
+        data: { userId: "123", username: "Builder", command: "help", argument: "first second" }
+    });
+    assert.equal(result.status, "handled");
+    assert.equal(context.userId, "123");
+    assert.equal(context.serverId, "server-1");
+    assert.deepEqual(context.args, ["first", "second"]);
+});
+
 test("ignores unrelated events and reports unregistered commands", async () => {
     const router = new CommandRouter();
     assert.deepEqual(await router.handle({ event: "EmergencyCall" }), {
@@ -108,23 +123,135 @@ test("Poll mode resolves the triggering player and sends one private message", a
 
 test("v2 Poll mode acknowledges an event after its command handler completes", async () => {
     const calls = [];
+    let acknowledgementDone;
+    const acknowledged = new Promise(resolve => { acknowledgementDone = resolve; });
     const sdk = new LibertyJS({
         SERVER_KEY: "server-secret", POLL_SUBSCRIPTION_ID: "sub_1", POLL_TOKEN: "ltp_token",
         FETCH: async (url, options) => {
             calls.push({ url: url.toString(), options });
             if (url.toString().endsWith("/events")) return jsonResponse({ events: [customCommand({ id: "event-1" })] });
-            if (url.toString().endsWith("/acknowledge")) return jsonResponse({ acknowledged: ["event-1"] });
+            if (url.toString().endsWith("/acknowledge")) {
+                acknowledgementDone();
+                return jsonResponse({ acknowledged: ["event-1"] });
+            }
             return jsonResponse({ message: "Success" });
         }
     });
     sdk.commands.command("help", () => "done");
-    const handled = new Promise(resolve => sdk.commands.once("handled", resolve));
     await sdk.commands.start({ pollInterval: 100 });
-    await handled;
+    await acknowledged;
     await sdk.commands.stop();
     const acknowledge = calls.find(call => call.url.endsWith("/acknowledge"));
     assert.ok(acknowledge);
     assert.equal(acknowledge.options.body, JSON.stringify({ eventIds: ["event-1"] }));
+});
+
+test("v2 Poll follows cursors so later events are not hidden by an earlier page", async () => {
+    const reads = [];
+    const acknowledged = [];
+    let finish;
+    const finished = new Promise(resolve => { finish = resolve; });
+    const sdk = new LibertyJS({
+        SERVER_KEY: "cursor-server-secret", POLL_SUBSCRIPTION_ID: "sub_1", POLL_TOKEN: "ltp_token",
+        FETCH: async (url, options) => {
+            const target = new URL(url);
+            if (target.pathname.endsWith("/acknowledge")) {
+                const ids = JSON.parse(options.body).eventIds;
+                acknowledged.push(...ids);
+                if (ids.includes("event-2")) finish();
+                return jsonResponse({ acknowledged: ids });
+            }
+            reads.push(target.toString());
+            return target.searchParams.get("cursor") === "next-page"
+                ? jsonResponse({ events: [customCommand({ id: "event-2", _id: "event-2" })], hasMore: false })
+                : jsonResponse({ events: [customCommand({ id: "event-1" })], hasMore: true, nextCursor: "next-page" });
+        }
+    });
+    sdk.commands.command("help", () => undefined);
+    await sdk.commands.start({ pollInterval: 100 });
+    await finished;
+    await sdk.commands.stop();
+    assert.equal(reads[1].includes("cursor=next-page"), true);
+    assert.deepEqual(acknowledged, ["event-1", "event-2"]);
+});
+
+test("failed handlers remain pending and are retried before acknowledgement", async () => {
+    let attempts = 0;
+    const acknowledgements = [];
+    let finish;
+    const finished = new Promise(resolve => { finish = resolve; });
+    const router = new CommandRouter({
+        pollEvents: async () => ({ events: [customCommand({ id: "event-1" })] }),
+        acknowledgeEvents: async ids => { acknowledgements.push(ids); finish(); return { acknowledged: ids }; }
+    });
+    router.command("help", () => {
+        attempts++;
+        if (attempts === 1) throw new Error("temporary failure");
+    });
+    await router.start({ pollInterval: 100 });
+    await finished;
+    await router.stop();
+    assert.equal(attempts, 2);
+    assert.deepEqual(acknowledgements, [["event-1"]]);
+});
+
+test("v2 Poll listEvents passes cursor and limit to the gateway", async () => {
+    let requested;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "options-server-secret", POLL_SUBSCRIPTION_ID: "sub_1", POLL_TOKEN: "ltp_token",
+        FETCH: async url => { requested = new URL(url); return jsonResponse({ events: [] }); }
+    });
+    await sdk.webhook.listEvents({ cursor: "opaque/value", limit: 100 });
+    assert.equal(requested.searchParams.get("cursor"), "opaque/value");
+    assert.equal(requested.searchParams.get("limit"), "100");
+    await assert.rejects(sdk.webhook.listEvents({ limit: 101 }), /limit must be an integer/);
+});
+
+test("a slow Poll request does not hold up an ER:LC command", async () => {
+    let releasePoll;
+    let pollStarted;
+    const started = new Promise(resolve => { pollStarted = resolve; });
+    const sdk = new LibertyJS({
+        SERVER_KEY: "independent-server-secret", POLL_SUBSCRIPTION_ID: "sub_1", POLL_TOKEN: "ltp_token",
+        FETCH: async (url, options) => {
+            if (new URL(url).hostname === "api.libertytools.dev") {
+                pollStarted();
+                return await new Promise(resolve => { releasePoll = resolve; });
+            }
+            assert.equal(options.method, "POST");
+            return jsonResponse({ message: "Success" });
+        }
+    });
+    const poll = sdk.webhook.events();
+    await started;
+    const command = await Promise.race([
+        sdk.sendPrivateServerCommand([":h still works"]),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Command was blocked by Poll")), 500))
+    ]);
+    assert.equal(command.successes, 1);
+    releasePoll(jsonResponse({ events: [] }));
+    await poll;
+});
+
+test("stopping the bot cancels a Poll Retry-After wait", async () => {
+    let firstRequest;
+    const requested = new Promise(resolve => { firstRequest = resolve; });
+    let polls = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "retry-server-secret", POLL_SUBSCRIPTION_ID: "sub_1", POLL_TOKEN: "ltp_token",
+        FETCH: async () => {
+            polls++;
+            firstRequest();
+            return jsonResponse({ error: { code: "rate_limited" } }, {
+                status: 429, headers: { "Retry-After": "30" }
+            });
+        }
+    });
+    await sdk.commands.start();
+    await requested;
+    await sdk.commands.stop({ timeout: 1_000 });
+    assert.equal(sdk.commands.running, false);
+    assert.equal(polls, 1);
 });
 
 test("reply fails safely when the triggering player is unavailable", async () => {

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0-beta.2 (local release candidate)
+
+### Fixed
+
+- Poll command routing follows cursor pages so later events remain reachable.
+- Failed handlers stay pending for retry instead of being acknowledged.
+- Poll rate-limit waits can be canceled during shutdown and no longer block ER:LC command requests.
+- The two runnable examples use v2 subscription IDs and private Poll tokens instead of the legacy public webhook ID.
+
+### Added
+
+- `webhook.listEvents({ cursor, limit })` and `webhook.events({ cursor, limit })` for manual v2 Poll pagination.
+- Regression tests for pagination, failed-handler retry, independent request paths, and shutdown during a retry delay.
+
 ## 1.3.0-beta.1
 
 ### Added
