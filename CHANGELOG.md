@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+Stable release of the command router, TypeScript declarations, and v2 Poll
+support developed and tested in the 1.3.0 beta series. Includes cursor-based
+Poll pagination, private subscription credentials, retryable failed handlers,
+and cancellation-safe rate-limit waits.
+
 ## 1.3.0-beta.2 (local release candidate)
 
 ### Fixed
