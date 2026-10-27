@@ -190,7 +190,7 @@ test("normalizes network failures", async () => {
     });
     const response = await sdk.getPrivateServerAPI();
     assert.equal(response.error, "network-error");
-    assert.equal(response.cause, "connection failed");
+    assert.equal(response.cause, undefined);
 });
 
 test("stops after repeated invalid global API key responses", async () => {
@@ -216,12 +216,15 @@ test("verifies official Ed25519 webhook signing format over timestamp + raw body
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     const publicKeyBase64 = publicKey.export({ format: "der", type: "spki" }).toString("base64");
     const rawBody = Buffer.from('{"event":"CustomCommand"}');
-    const timestamp = "1774666018";
+    const timestamp = String(Math.floor(Date.now() / 1_000));
     const signature = sign(null, Buffer.concat([Buffer.from(timestamp), rawBody]), privateKey).toString("hex");
     const sdk = new LibertyJS({ SERVER_KEY: "server-secret", WEBHOOK_PUBLIC_KEY: publicKeyBase64 });
 
     assert.equal(sdk.webhook.verify({ timestamp, signature, rawBody }), true);
     assert.equal(sdk.webhook.verify({ timestamp, signature, rawBody: Buffer.from("tampered") }), false);
+    const oldTimestamp = String(Math.floor(Date.now() / 1_000) - 600);
+    const oldSignature = sign(null, Buffer.concat([Buffer.from(oldTimestamp), rawBody]), privateKey).toString("hex");
+    assert.equal(sdk.webhook.verify({ timestamp: oldTimestamp, signature: oldSignature, rawBody }), false);
 });
 
 test("integrates directly with Liberty Tools dashboard webhook IDs", async () => {
@@ -253,4 +256,26 @@ test("accepts a full dashboard ER:LC webhook URL", () => {
         WEBHOOK_ID: "https://api.libertytools.dev/webhook/url-webhook-id"
     });
     assert.equal(sdk.webhook.erlcUrl(), "https://api.libertytools.dev/webhook/url-webhook-id");
+});
+
+test("supports v2 Poll subscriptions with bearer auth and acknowledgements", async () => {
+    const calls = [];
+    const sdk = new LibertyJS({
+        SERVER_KEY: "server-secret", LIBERTY_API_URL: "https://api.libertytools.dev/",
+        WEBHOOK_INGEST_URL: "https://api.libertytools.dev/v1/ingest/pub_123",
+        POLL_SUBSCRIPTION_ID: "sub_123", POLL_TOKEN: "ltp_secret",
+        FETCH: async (url, options) => {
+            calls.push({ url: url.toString(), options });
+            return jsonResponse(options.method === "POST" ? { acknowledged: ["evt_1"] } : { events: [{ id: "evt_1" }] });
+        }
+    });
+    assert.equal(sdk.webhook.erlcUrl(), "https://api.libertytools.dev/v1/ingest/pub_123");
+    await sdk.webhook.events();
+    await sdk.webhook.acknowledge(["evt_1"]);
+    assert.deepEqual(calls.map(call => call.url), [
+        "https://api.libertytools.dev/v1/poll/subscriptions/sub_123/events",
+        "https://api.libertytools.dev/v1/poll/subscriptions/sub_123/events/acknowledge"
+    ]);
+    assert.equal(calls[0].options.headers.get("Authorization"), "Bearer ltp_secret");
+    assert.equal(calls[1].options.body, JSON.stringify({ eventIds: ["evt_1"] }));
 });
