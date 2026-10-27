@@ -79,8 +79,9 @@ const erlc = new LibertyJS({
     // Optional; defaults to 3 retries after HTTP 429 responses.
     MAX_RATE_LIMIT_RETRIES: 3,
 
-    // Optional Liberty Tools dashboard webhook ID or full ER:LC webhook URL.
-    WEBHOOK_ID: process.env.LIBERTYTOOLS_WEBHOOK_ID
+    // For a new LibertyTools Poll client, copy both values from Outputs.
+    POLL_SUBSCRIPTION_ID: process.env.POLL_SUBSCRIPTION_ID,
+    POLL_TOKEN: process.env.POLL_TOKEN
 });
 ```
 
@@ -181,59 +182,53 @@ if (!valid) {
 
 The official public key is built in and exported as `ERLC_WEBHOOK_PUBLIC_KEY`. `verifyWebhook(...)` is also available directly on the SDK instance.
 
-## Liberty Tools dashboard webhooks
+## Liberty Tools dashboard connections
 
-Webhooks created at [dash.libertytools.dev](https://dash.libertytools.dev/dashboard) work directly with LibertyJS.
+Connections created at [dash.libertytools.dev](https://dash.libertytools.dev/dashboard) can deliver the same ER:LC event to a hosted command, a Poll client, and a forward destination. New Poll clients need a private subscription ID and token. The public ER:LC webhook URL receives events but cannot read the Poll backlog.
 
 ### Dashboard setup
 
-1. Sign in to the Liberty Tools dashboard with Roblox OAuth.
-2. Create a webhook and choose Poll, Easy, or Proxy mode.
-3. Copy the dashboard's **Webhook URL for ERLC** into the Event Webhook field in your ER:LC private-server settings.
-4. Copy either the webhook ID or that complete URL into your application's `LIBERTYTOOLS_WEBHOOK_ID` environment variable.
-5. Initialize LibertyJS as shown below.
+1. Sign in with Roblox and create a connection for your ER:LC server.
+2. Copy that connection's **ER:LC webhook URL** into the Event Webhook field in your ER:LC private-server settings.
+3. In **Outputs**, create a Poll client. Copy its subscription ID and one-time token.
+4. Store those values privately in your bot's environment and initialize LibertyJS as shown below. Your bot must stay running to handle events.
 
-Treat the webhook ID like a credential. Anyone who obtains a Poll-mode ID may be able to request its stored events.
+The Poll token is a secret. Do not put it in client-side code, logs, a public repository, or a chat message. Rotate it in the dashboard if exposed.
 
 ```env
-SERVER_KEY=your-erlc-server-key
-LIBERTYTOOLS_WEBHOOK_ID=your-dashboard-webhook-id
+ERLC_SERVER_KEY=your-erlc-server-key
+POLL_SUBSCRIPTION_ID=your-poll-subscription-id
+POLL_TOKEN=your-private-poll-token
 ```
 
 ```js
 import LibertyJS from "@libertytools/libertyjs";
 
 const erlc = new LibertyJS({
-    SERVER_KEY: process.env.SERVER_KEY,
-    WEBHOOK_ID: process.env.LIBERTYTOOLS_WEBHOOK_ID
+    SERVER_KEY: process.env.ERLC_SERVER_KEY,
+    POLL_SUBSCRIPTION_ID: process.env.POLL_SUBSCRIPTION_ID,
+    POLL_TOKEN: process.env.POLL_TOKEN
 });
 
-// This is the URL that belongs in the ER:LC Event Webhook setting.
-console.log(erlc.webhook.erlcUrl());
-
-// Checks whether the Liberty Tools relay service is available.
-const status = await erlc.webhook.status();
+const response = await erlc.webhook.events();
+if (response?.error) {
+    console.error(response.message);
+} else {
+    console.log(response.events ?? []);
+}
 ```
 
-`WEBHOOK_ID` accepts either of these values:
+### Choosing an output
 
-```text
-abc123
-https://api.libertytools.dev/webhook/abc123
-```
-
-### Choosing a dashboard mode
-
-| Mode | Delivery behavior | LibertyJS usage |
+| Output | Delivery behavior | When to use it |
 | --- | --- | --- |
-| Poll | Liberty Tools stores events until the application requests them. | Call `webhook.events()`. |
-| Easy | Liberty Tools formats and sends events to the destination configured in the dashboard. | No polling is required. |
-| Proxy | Liberty Tools forwards events to the destination configured in the dashboard. | No polling is required. |
+| Hosted command | LibertyTools runs a simple dashboard rule, such as replying to `;help`. | No bot process required; connect the ER:LC server key and have the owner authorize LibertyTools. |
+| Poll client | LibertyTools stores events until your running application asks for them. | Use `webhook.events()` or `commands.start()` with a subscription ID and token. |
+| Forward destination | LibertyTools sends signed, normalized events or a raw mirror to your URL. | Use when you already host an event receiver. |
 
 ### Polling events
 
-Only use `webhook.events()` or its clearer alias `webhook.listEvents()` with a
-Poll-mode dashboard webhook:
+Only use `webhook.events()` or its clearer alias `webhook.listEvents()` with a Poll client:
 
 ```js
 const response = await erlc.webhook.events();
@@ -247,17 +242,18 @@ if (response?.error) {
 }
 ```
 
-The response contains `count` and `events`. Current event types include custom in-game commands and emergency calls.
+The v2 response includes `events` and Poll backlog information. Acknowledge events after successful processing; `commands.start()` does this for handled v2 events. Current event types include custom in-game commands and emergency calls.
 
 ## Easy command handlers
 
-LibertyJS can poll a Liberty Tools Poll-mode webhook and route ER:LC custom-command
+LibertyJS can poll a LibertyTools Poll client and route ER:LC custom-command
 events to small handlers. Registering `help` or `;help` is equivalent:
 
 ```js
 const erlc = new LibertyJS({
-    SERVER_KEY: process.env.SERVER_KEY,
-    WEBHOOK_ID: process.env.LIBERTYTOOLS_WEBHOOK_ID
+    SERVER_KEY: process.env.ERLC_SERVER_KEY,
+    POLL_SUBSCRIPTION_ID: process.env.POLL_SUBSCRIPTION_ID,
+    POLL_TOKEN: process.env.POLL_TOKEN
 });
 
 erlc.commands.command("help", async context => {
@@ -352,7 +348,7 @@ consume the same connection without hiding events from one another.
 | `POLL_TOKEN` | Yes for v2 Poll | One-time Poll credential from the dashboard. |
 | `WEBHOOK_INGEST_URL` | No | Full ER:LC ingest URL, used by `webhook.erlcUrl()`. |
 | `LIBERTY_API_URL` | No | Gateway base URL; defaults to `https://api.libertytools.dev/`. |
-| `WEBHOOK_ID` | Yes for relay methods | Dashboard webhook ID or complete ER:LC webhook URL. |
+| `WEBHOOK_ID` | Legacy relay only | Older dashboard webhook ID or complete ER:LC webhook URL. New v2 Poll clients should use a subscription ID and token instead. |
 | `WEBHOOK_URL` | No | Relay base URL; defaults to `https://api.libertytools.dev/`. Use this for a self-hosted relay. |
 | `WEBHOOK_TOKEN` | No | Backward-compatible alias for `WEBHOOK_ID`. |
 
