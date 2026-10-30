@@ -1,261 +1,89 @@
 # LibertyJS
 
-A lightweight Node.js SDK for the [ER:LC Private Server API v2](https://apidocs.erlc.gg/).
+LibertyJS is a JavaScript SDK for building bots and integrations with the ERLC API. Use it to read server information, send remote commands, and handle custom commands such as `;help` from your own application.
+
+LibertyJS runs in **Node.js**, including TypeScript projects. It does not run inside Roblox or in a browser. Your application must stay running to receive events.
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/YFjuXJcnVC)
 [![npm](https://img.shields.io/npm/v/@libertytools/libertyjs)](https://www.npmjs.com/package/@libertytools/libertyjs)
 [![downloads](https://img.shields.io/npm/dm/@libertytools/libertyjs)](https://www.npmjs.com/package/@libertytools/libertyjs)
+[![Website](https://img.shields.io/badge/Website-LibertyTools-008b9a)](https://libertytools.dev/)
+[![Dashboard](https://img.shields.io/badge/Dashboard-Open-008b9a)](https://dash.libertytools.dev/)
 
-## Features
+[Changelog](CHANGELOG.md)
 
-- All ER:LC v2 server-information query fields
-- API-compliant remote command requests
-- Optional global API key support for public applications
-- Bucket-aware rate-limit tracking and automatic `429` retries
-- Structured HTTP, API, and network errors
-- Official Ed25519 event-webhook signature verification
-- Optional compatibility with the Liberty Tools webhook relay
+## Choose what you need
 
-## Installation
+| I want to… | Start here |
+| --- | --- |
+| Read server information or send a command from code | [Make your first API request](#make-your-first-api-request) |
+| Run my own code when someone enters `;help` | [Handle custom commands with Poll](#handle-custom-commands-with-poll) |
+| Receive events at a public URL | [Webhooks and forwarded events](#webhooks-and-forwarded-events) |
+| Create simple commands without writing code | Use hosted commands in the [dashboard](https://dash.libertytools.dev/); the SDK is not required. |
 
-```bash
+You can use LibertyTools alongside Melonly or another service by adding a forwarding destination in the dashboard. That is a gateway feature, not an SDK setting. LibertyTools is not affiliated with those services or the ERLC team.
+
+## Install
+
+The package requires Node.js 18 or later and uses ES modules. Use a currently maintained Node.js release. In a new project folder, run:
+
+```sh
+npm init -y
+npm pkg set type=module
 npm install @libertytools/libertyjs
 ```
 
-LibertyJS requires Node.js 18 or later.
+Keep credentials in environment variables. Do not put them in source code, public repositories, browser code, or logs. The examples below read `ERLC_SERVER_KEY` from your environment.
 
-## TypeScript
+For example, in PowerShell:
 
-TypeScript declarations are included; the SDK runtime remains JavaScript. Use an
-ES module project (`"type": "module"` in `package.json`) with NodeNext resolution,
-or a bundler configured for a Node.js target. Install `@types/node` for Node.js
-globals. The SDK requires Node.js and is not a browser SDK.
-
-```ts
-import LibertyJS, { type ServerOption } from "@libertytools/libertyjs";
-
-const serverKey = process.env.SERVER_KEY;
-if (!serverKey) throw new Error("SERVER_KEY is required");
-
-const erlc = new LibertyJS({ SERVER_KEY: serverKey });
-const fields: ServerOption[] = ["Players", "Staff"];
-const response = await erlc.getPrivateServerAPI(fields);
-
-// Responses are unvalidated JSON and may also contain SDK errors or be null.
-if (typeof response === "object" && response !== null) {
-    if ("error" in response) {
-        console.error(response.error);
-    } else if ("Name" in response && typeof response.Name === "string") {
-        console.log(response.Name);
-    }
-}
+```powershell
+$env:ERLC_SERVER_KEY="your-server-key"
 ```
 
-Constructor options, query names, command summaries, webhook verification inputs,
-and exported SDK error types are declared. Raw API/relay payloads are `unknown`:
-validate them against your application's expected schema before use. The types
-do not promise response fields that the SDK does not validate. Query names are
-checked at compile time; JavaScript callers still receive the existing behavior
-of ignoring invalid options.
+On macOS or Linux:
 
-`getPrivateServerAPI(fields, true)` returns typed `data` and `invalidOptions`
-properties. `sendPrivateServerCommand()` returns a command summary or an input
-error; check `"error" in result` before reading summary counts.
+```sh
+export ERLC_SERVER_KEY="your-server-key"
+```
 
-## Initialization
+These set the variable for the current terminal session. A `.env` file is not loaded automatically by these examples; use your host's environment settings or configure an environment-file loader yourself.
+
+## Make your first API request
+
+Save this as `index.js`, then run `node index.js`:
 
 ```js
 import LibertyJS from "@libertytools/libertyjs";
 
-const erlc = new LibertyJS({
-    SERVER_KEY: process.env.SERVER_KEY,
+const erlc = new LibertyJS({ SERVER_KEY: process.env.ERLC_SERVER_KEY });
+const response = await erlc.getPrivateServerAPI(["Players"]);
 
-    // Required for public applications serving multiple ER:LC servers.
-    GLOBAL_API_KEY: process.env.ERLC_GLOBAL_API_KEY,
-
-    // Optional; defaults to https://api.erlc.gg/v2/
-    PRIVATE_SERVER_API: "https://api.erlc.gg/v2/",
-
-    // Optional; defaults to 3 retries after HTTP 429 responses.
-    MAX_RATE_LIMIT_RETRIES: 3,
-
-    // For a new LibertyTools Poll client, copy both values from Outputs.
-    POLL_SUBSCRIPTION_ID: process.env.POLL_SUBSCRIPTION_ID,
-    POLL_TOKEN: process.env.POLL_TOKEN
-});
-```
-
-`AUTHORIZATION` is accepted as an alias for `GLOBAL_API_KEY`.
-
-## Fetch server information
-
-The base server fields are always returned. Pass any combination of the nine optional v2 fields:
-
-```js
-const server = await erlc.getPrivateServerAPI([
-    "Players",
-    "Staff",
-    "JoinLogs",
-    "Queue",
-    "KillLogs",
-    "CommandLogs",
-    "ModCalls",
-    "EmergencyCalls",
-    "Vehicles"
-]);
-```
-
-Invalid options are ignored. To receive them alongside the API response:
-
-```js
-const { data, invalidOptions } = await erlc.getPrivateServerAPI(
-    ["Players", "NotARealField"],
-    true
-);
-```
-
-Duplicate options are automatically removed so the API does not reject the request for duplicate query parameters.
-
-## Run remote commands
-
-```js
-const result = await erlc.sendPrivateServerCommand([
-    ":h Hello world!",
-    ":kick PlayerName Spamming"
-]);
-```
-
-Each command is sent sequentially as the API-required JSON object:
-
-```json
-{ "command": ":h Hello world!" }
-```
-
-LibertyJS intentionally does not maintain a command allowlist. ER:LC is the authoritative validator, so newly added commands remain usable without an SDK release.
-
-The result includes aggregate counts and each API response:
-
-```js
-{
-    successes: 2,
-    failures: 0,
-    failureReasons: [],
-    results: [
-        { command: ":h Hello world!", response: { message: "Success" } }
-    ]
-}
-```
-
-## Errors
-
-API failures are returned as structured objects rather than thrown:
-
-```js
-{
-    error: "api-error", // or "rate-limited" / "network-error"
-    message: "...",
-    status: 403,
-    statusText: "Forbidden",
-    code: 2002,
-    headers: {},
-    apiResponse: { code: 2002, message: "..." }
-}
-```
-
-When ER:LC returns `429`, LibertyJS waits for `Retry-After` (falling back to `retry_after` or `X-RateLimit-Reset`) and retries up to `MAX_RATE_LIMIT_RETRIES` times.
-
-## Official ER:LC event webhooks
-
-ER:LC signs `timestamp + raw_body` with Ed25519. Pass the exact raw request bytes; do not parse and re-serialize the JSON before verification. Verification also rejects timestamps more than five minutes from the current time; keep the host clock synchronized.
-
-```js
-const valid = erlc.webhook.verify({
-    timestamp: request.headers["x-signature-timestamp"],
-    signature: request.headers["x-signature-ed25519"],
-    rawBody: request.rawBody // Buffer or Uint8Array
-});
-
-if (!valid) {
-    // Return a 4xx response.
-}
-```
-
-The official public key is built in and exported as `ERLC_WEBHOOK_PUBLIC_KEY`. `verifyWebhook(...)` is also available directly on the SDK instance.
-
-## Liberty Tools dashboard connections
-
-Connections created at [dash.libertytools.dev](https://dash.libertytools.dev/dashboard) can deliver the same ER:LC event to a hosted command, a Poll client, and a forward destination. New Poll clients need a private subscription ID and token. The public ER:LC webhook URL receives events but cannot read the Poll backlog.
-
-### Dashboard setup
-
-1. Sign in with Roblox and create a connection for your ER:LC server.
-2. Copy that connection's **ER:LC webhook URL** into the Event Webhook field in your ER:LC private-server settings.
-3. In **Outputs**, create a Poll client. Copy its subscription ID and one-time token.
-4. Store those values privately in your bot's environment and initialize LibertyJS as shown below. Your bot must stay running to handle events.
-
-The Poll token is a secret. Do not put it in client-side code, logs, a public repository, or a chat message. Rotate it in the dashboard if exposed.
-
-```env
-ERLC_SERVER_KEY=your-erlc-server-key
-POLL_SUBSCRIPTION_ID=your-poll-subscription-id
-POLL_TOKEN=your-private-poll-token
-```
-
-```js
-import LibertyJS from "@libertytools/libertyjs";
-
-const erlc = new LibertyJS({
-    SERVER_KEY: process.env.ERLC_SERVER_KEY,
-    POLL_SUBSCRIPTION_ID: process.env.POLL_SUBSCRIPTION_ID,
-    POLL_TOKEN: process.env.POLL_TOKEN
-});
-
-const response = await erlc.webhook.events();
 if (response?.error) {
     console.error(response.message);
 } else {
-    console.log(response.events ?? []);
+    console.log(response);
 }
 ```
 
-### Choosing an output
+Get the server key from your ERLC private-server settings. Your server needs ERLC API access. If ERLC requires approval for a public application, the server owner must authorize that application too.
 
-| Output | Delivery behavior | When to use it |
-| --- | --- | --- |
-| Hosted command | LibertyTools runs a simple dashboard rule, such as replying to `;help`. | No bot process required; connect the ER:LC server key and have the owner authorize LibertyTools. |
-| Poll client | LibertyTools stores events until your running application asks for them. | Use `webhook.events()` or `commands.start()` with a subscription ID and token. |
-| Forward destination | LibertyTools sends signed, normalized events or a raw mirror to your URL. | Use when you already host an event receiver. |
+Public applications serving multiple servers should also pass their own `GLOBAL_API_KEY`. This is separate from each server's key; do not ask users to supply your application's global key.
 
-### Polling events
+## Handle custom commands with Poll
 
-Only use `webhook.events()` or its clearer alias `webhook.listEvents()` with a Poll client:
+Poll means your application asks LibertyTools for queued events. You do not need a public URL for your application.
 
-```js
-const response = await erlc.webhook.events();
+1. Sign in to the [dashboard](https://dash.libertytools.dev/) and create a connection.
+2. Copy its **ERLC webhook URL** into your ERLC server's Event Webhook setting.
+3. Under **Outputs**, create a Poll client. Save its subscription ID and private token. The token is shown once; rotate it if lost or exposed.
+4. Set `POLL_SUBSCRIPTION_ID` and `POLL_TOKEN` in the same environment as `ERLC_SERVER_KEY`.
 
-if (response?.error) {
-    console.error(response.status, response.apiResponse);
-} else {
-    for (const event of response.events ?? []) {
-        console.log(event.event, event);
-    }
-}
-```
-
-The v2 response includes `events`, `nextCursor`, `hasMore`, `pendingCount`,
-`oldestPendingAt`, and `droppedCount`. Call `webhook.listEvents({ cursor, limit })`
-to read another page (limit 1–100). Acknowledge events after successful processing;
-`commands.start()` follows pages and acknowledges completed v2 events. Current
-event types include custom in-game commands and emergency calls. Check
-`droppedCount` after reconnecting: it rises when old pending events expire or the
-subscription reaches its 5,000-event cap.
-
-## Easy command handlers
-
-LibertyJS can poll a LibertyTools Poll client and route ER:LC custom-command
-events to small handlers. Registering `help` or `;help` is equivalent:
+Use the same environment-variable syntax shown above for those two additional values. Then replace `index.js` with:
 
 ```js
+import LibertyJS from "@libertytools/libertyjs";
+
 const erlc = new LibertyJS({
     SERVER_KEY: process.env.ERLC_SERVER_KEY,
     POLL_SUBSCRIPTION_ID: process.env.POLL_SUBSCRIPTION_ID,
@@ -263,122 +91,193 @@ const erlc = new LibertyJS({
 });
 
 erlc.commands.command("help", async context => {
-    await context.reply("Need help? Join our support channel or run ;commands.");
-}, {
-    // Applied separately to each player.
-    cooldown: 10_000
+    const result = await context.reply("Need help? Ask a staff member.");
+    if ("error" in result || result.failures > 0) {
+        throw new Error("The reply could not be sent");
+    }
 });
 
-erlc.commands.on("commandError", ({ command, error }) => {
-    console.error(`Command ${command} failed:`, error);
-});
+erlc.commands.on("commandError", ({ error }) => console.error(error.message));
+erlc.commands.on("pollError", ({ error }) => console.error(error.message));
+
+async function shutdown() {
+    try { await erlc.commands.stop(); }
+    catch (error) { console.error(error.message); process.exitCode = 1; }
+}
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
 
 await erlc.commands.start();
+console.log("Listening for ;help. Press Ctrl+C to stop.");
 ```
 
-A complete runnable version is available in `examples/easy-commands.mjs`.
-For a short in-game smoke test, set `ERLC_SERVER_KEY`, `POLL_SUBSCRIPTION_ID`,
-and `POLL_TOKEN`, then run `npm run example:commands` and enter `;libertytest`.
+Run `node index.js`, join your ERLC server, and enter `;help`. The SDK receives the command through Poll and asks ERLC to send you a private message.
 
-`commands.start()` performs an immediate Poll request, handles returned events in
-order, then waits two seconds before polling again. It follows the gateway cursor
-to reach later pages and prevents overlapping Poll requests. It ignores event IDs
-it has already handled in the current process. If a handler throws, the event is
-left pending and can be retried on the next pass; successful, unhandled, and
-cooldown events are acknowledged. If you call `reply()` or `announce()`, inspect
-their returned result and throw from the handler when you want a failed action
-retried. Make external side effects idempotent because an acknowledgement can fail
-after your handler succeeds. Gateway rate limits are respected using `Retry-After`;
-stopping the bot cancels the wait.
+`command("help", handler)` and `command(";help", handler)` register the same name. Registration does not configure the game's webhook setting for you.
 
-Stop gracefully during application shutdown:
+### What a handler receives
+
+| Value or method | Meaning |
+| --- | --- |
+| `context.command` | Lowercase command name, without `;`. |
+| `context.argument` | Original argument text. |
+| `context.args` | Parsed arguments. `Player "final warning"` becomes `["Player", "final warning"]`. |
+| `context.userId` / `context.serverId` | IDs supplied by the normalized event. |
+| `context.event` | Normalized event, including the original input in `raw`. |
+| `context.reply(message)` | Resolve the triggering player and send a private message. |
+| `context.announce(message)` | Send an ERLC `:h` message. |
+
+Replies and announcements allow up to 200 characters and replace line breaks with spaces. They return a result; an API failure does not automatically throw. Check for `error` or a nonzero `failures` count. A player who has left may produce `player_not_found`.
+
+### Poll behavior and retries
+
+- `commands.start()` reads immediately, processes events in order, then waits two seconds between pages. Use `{ pollInterval: 5000 }` to change that delay in milliseconds; the minimum is 100.
+- The router follows cursor pages and acknowledges successful, unhandled, ignored, duplicate, and cooldown events with string IDs. An acknowledgement tells the gateway that this Poll client is finished with the event.
+- A thrown handler error leaves the event pending. Avoid repeating side effects on retry: an earlier action may have succeeded before a later action failed.
+- Duplicate tracking is limited to the current process and a bounded cache. It is not a guarantee of exactly-once execution across restarts.
+- `commands.stop()` aborts Poll requests and waits up to 10 seconds for active work. It cannot forcibly cancel your handler.
+
+**Known 1.3.0 issue:** when a handler has a cooldown, a failed event may be acknowledged on its next delivery without retrying. Avoid cooldowns for handlers that depend on retrying failures until this is fixed. See the [roadmap](ROADMAP.md).
+
+For repository examples, see [easy-commands.mjs](examples/easy-commands.mjs) and [quick-test.mjs](examples/quick-test.mjs). These examples log failed replies and do not retry them. The handler completes, so the Poll event is acknowledged even if the reply failed. After cloning the repository and installing dependencies, `npm run example:commands` starts the `;libertytest` example.
+
+## API reference
+
+### Constructor options
+
+| Option | Purpose |
+| --- | --- |
+| `SERVER_KEY` | Required ERLC server API key. Currently required even for a Poll-only client. |
+| `GLOBAL_API_KEY` | Your public application's global API key, when required. `AUTHORIZATION` is an alias. |
+| `POLL_SUBSCRIPTION_ID`, `POLL_TOKEN` | Supply both for a current LibertyTools Poll client. |
+| `LIBERTY_API_URL` | Poll API base URL; defaults to `https://api.libertytools.dev/`. |
+| `WEBHOOK_INGEST_URL` | Optional ingest URL returned by `webhook.erlcUrl()`; it does not create a connection. |
+| `PRIVATE_SERVER_API` | API base URL; defaults to `https://api.erlc.gg/v2/`. Automatic ERLC authentication and shared rate-limit handling apply only to the official API origin. |
+| `MAX_RATE_LIMIT_RETRIES` | Retries after HTTP 429; defaults to 3. |
+| `WEBHOOK_PUBLIC_KEY` | Override the built-in ERLC Ed25519 public key, for example in tests. |
+| `FETCH` | Optional Fetch implementation; defaults to Node.js `fetch`. |
+
+Legacy options `WEBHOOK_ID` and `WEBHOOK_TOKEN` identify an older relay connection; `WEBHOOK_URL` configures that relay's base URL. They do not replace a current private Poll token. Use a subscription ID and token for new clients.
+
+### Server information
+
+`getPrivateServerAPI()` returns base server information. Pass any of these extra fields:
 
 ```js
-process.once("SIGTERM", async () => {
-    await erlc.commands.stop();
-});
+const response = await erlc.getPrivateServerAPI([
+    "Players", "Staff", "JoinLogs", "Queue", "KillLogs",
+    "CommandLogs", "ModCalls", "EmergencyCalls", "Vehicles"
+]);
 ```
 
-The handler context includes the normalized command, raw argument text, parsed
-arguments, user ID, server ID, original event, and two response helpers:
+Duplicate fields are removed. Unknown fields are ignored. Pass `true` as the second argument to receive `{ data, invalidOptions }` instead of the response alone.
+
+### Remote commands
 
 ```js
-erlc.commands.command("warn", async context => {
-    console.log(context.argument); // Player "final warning"
-    console.log(context.args);     // ["Player", "final warning"]
-
-    await context.reply("Your warning was received.");
-    await context.announce("A warning was submitted.");
-});
+const result = await erlc.sendPrivateServerCommand([":h Hello everyone!"]);
+if ("error" in result) {
+    console.error(result.message);
+} else {
+    console.log(result.successes, result.failures);
+    if (result.failures) console.error(result.failureReasons);
+}
 ```
 
-`reply()` resolves the triggering user ID against the current ER:LC player list
-before constructing a private-message command. If the player has left, it returns
-`{ error: "player_not_found", ... }` and sends nothing. Messages are limited to
-200 characters and line breaks are replaced with spaces.
+Commands are sent sequentially as `{ command: ":h Hello everyone!" }`. ERLC decides which commands are valid. A summary contains `successes`, `failures`, `failureReasons`, and `results`. An empty array or a non-array argument returns an input error.
 
-For a direct official ER:LC webhook, pass the exact signed request bytes to the
-same router. The handler runs only after signature verification:
+### Read Poll events yourself
+
+Use this for an event logger or another consumer that does not use the command router:
 
 ```js
-const result = await erlc.commands.handleWebhook({
+const page = await erlc.webhook.listEvents({ limit: 50 });
+if (page?.error) throw new Error(page.message);
+if (!page || !Array.isArray(page.events)) throw new Error("Unexpected Poll response");
+
+for (const event of page.events) {
+    if (!event || typeof event !== "object" || Array.isArray(event) ||
+        typeof event.id !== "string" || !event.id.trim() ||
+        typeof event.type !== "string" || !event.type.trim()) {
+        // Leave malformed events unacknowledged for investigation.
+        console.error("Skipping a malformed Poll event");
+        continue;
+    }
+    // Process the event successfully before acknowledging it.
+    console.log(event.type, event.id);
+    const result = await erlc.webhook.acknowledge([event.id]);
+    if (result?.error) throw new Error(result.message);
+}
+// If page.hasMore is true, read the next page with:
+// erlc.webhook.listEvents({ cursor: page.nextCursor, limit: 50 })
+```
+
+This snippet reads one page. For continuous custom-command handling, use `commands.start()`. Do not run two consumers on the same subscription unless you coordinate their acknowledgements. Create separate Poll clients for independent consumers.
+
+`webhook.events()` is an alias for `listEvents()`. The page includes `events`, `nextCursor`, `hasMore`, `pendingCount`, `oldestPendingAt`, and `droppedCount`. Read `droppedCount` after reconnecting to spot lost pending events. The gateway caps subscriptions at 5,000 pending events with a 14-day expiry; storage eviction can also remove events earlier.
+
+`listEvents()`, `events()`, `acknowledge()`, and `status()` accept an optional `signal` for cancellation. `limit` must be an integer from 1 to 100. `status()` checks gateway health, not whether your game is sending events. In Poll mode, `erlcUrl()` returns your supplied `WEBHOOK_INGEST_URL`, or `null` if none was supplied.
+
+## Webhooks and forwarded events
+
+Poll uses a token. Direct ERLC webhooks use an Ed25519 signature. LibertyTools signed forwards use a different authentication scheme. Do not treat these as interchangeable.
+
+For a direct ERLC webhook, verify the exact raw bytes before processing the body:
+
+```js
+const valid = erlc.verifyWebhook({
     timestamp: request.headers["x-signature-timestamp"],
     signature: request.headers["x-signature-ed25519"],
     rawBody: request.rawBody
 });
+if (!valid) {
+    // Return a 4xx response and do not process the request.
+} else {
+    // Parse, validate, and process the verified body here.
+}
 ```
 
-Applications receiving an already authenticated Proxy event can call
-`erlc.commands.handle(event)`. Do not pass untrusted public request bodies directly
-to `handle()`; authenticate the Proxy request first. Hosted Easy-mode delivery does
-not run SDK handlers unless it delivers an authenticated event to the application.
+This illustrates the SDK call, not a complete HTTP server. Your framework must supply the original request bytes and headers. Do not verify a parsed and re-serialized body. `webhook.verify()` is an alias; timestamps more than five minutes from the host clock are rejected.
 
-Use `pollError`, `handled`, `unhandled`, `cooldown`, and `commandError` listeners
-for application logging and metrics. A handler failure does not stop other commands.
+**Known 1.3.0 limitation:** `commands.handleWebhook()` does not unpack raw ERLC event batches. For now, verify the body, validate and split its `events` array, and normalize each event before calling `commands.handle(event)`. In particular, map raw `origin` to `data.userId` and the outer `server` to `serverId`. Prefer Poll for the ready-to-use command flow above.
 
-### Relay configuration options
+For a LibertyTools signed forward, verify the gateway signature in your receiver before calling `commands.handle(event)` with its normalized event. LibertyJS 1.3.0 does not include that verifier. Never pass unauthenticated public request bodies directly to `handle()`.
 
-For new Gateway v2 connections, create a Poll client in the dashboard and use
-the subscription ID and one-time token it shows:
+## Errors and rate limits
 
-```js
-const erlc = new LibertyJS({
-    SERVER_KEY: process.env.ERLC_SERVER_KEY,
-    WEBHOOK_INGEST_URL: process.env.WEBHOOK_INGEST_URL,
-    POLL_SUBSCRIPTION_ID: process.env.POLL_SUBSCRIPTION_ID,
-    POLL_TOKEN: process.env.POLL_TOKEN
-});
+HTTP and network failures normally return an object with `error` and `message`. HTTP errors also include `status`, `statusText`, `headers`, `apiResponse`, and optional `code` and `retryAfter` fields. Configuration mistakes and invalid method options can throw.
 
-erlc.commands.command("help", context => context.reply("How can we help?"));
-await erlc.commands.start();
+HTTP 429 responses trigger a bounded retry using `Retry-After`, then `retry_after` from the body or `X-RateLimit-Reset`. Other failures are not automatically retried. Instances sharing an ERLC key coordinate API requests within the same process; this does not coordinate separate processes or machines.
+
+After three recognized ERLC authentication failures, the instance stops making requests. Correct the credentials and create a new instance. In 1.3.0 this also blocks its Poll calls. Server queries and remote commands have no configurable SDK timeout yet; see the [known issues](ROADMAP.md#fixes-to-prioritize).
+
+## TypeScript
+
+Declarations ship with the package. Use an ES module project with NodeNext resolution, or a bundler targeting Node.js. Install `@types/node` for Node.js globals.
+
+```ts
+import LibertyJS, { type ServerOption } from "@libertytools/libertyjs";
+const key = process.env.ERLC_SERVER_KEY;
+if (!key) throw new Error("ERLC_SERVER_KEY is required");
+const erlc = new LibertyJS({ SERVER_KEY: key });
+const fields: ServerOption[] = ["Players", "Staff"];
+const response = await erlc.getPrivateServerAPI(fields);
+if (typeof response === "object" && response !== null && "Name" in response) {
+    console.log(response.Name);
+}
 ```
 
-LibertyJS acknowledges each v2 event after its handler completes. Each Poll
-subscription has an independent acknowledgement cursor, so multiple bots can
-consume the same connection without hiding events from one another.
+Options, method signatures, command contexts, and result summaries are typed. Raw API and Poll responses are `unknown` because the SDK does not validate their schema. Narrow or validate them before reading fields. CommonJS projects can use dynamic `import()`; the package does not ship a separate CommonJS build.
 
-| Option | Required | Description |
-| --- | --- | --- |
-| `POLL_SUBSCRIPTION_ID` | Yes for v2 Poll | Poll client ID from the dashboard. |
-| `POLL_TOKEN` | Yes for v2 Poll | One-time Poll credential from the dashboard. |
-| `WEBHOOK_INGEST_URL` | No | Full ER:LC ingest URL, used by `webhook.erlcUrl()`. |
-| `LIBERTY_API_URL` | No | Gateway base URL; defaults to `https://api.libertytools.dev/`. |
-| `WEBHOOK_ID` | Legacy relay only | Older dashboard webhook ID or complete ER:LC webhook URL. New v2 Poll clients should use a subscription ID and token instead. |
-| `WEBHOOK_URL` | No | Relay base URL; defaults to `https://api.libertytools.dev/`. Use this for a self-hosted relay. |
-| `WEBHOOK_TOKEN` | No | Backward-compatible alias for `WEBHOOK_ID`. |
+## Troubleshooting
 
-Do not confuse the dashboard relay with direct webhook verification:
+| Problem | What to check |
+| --- | --- |
+| “SERVER_KEY is required” | Set the variable in the terminal or host that runs your process. A `.env` file alone is not enough. |
+| No custom-command events | Check the ERLC webhook URL, connection status, subscription ID, and Poll token. Keep your bot running. |
+| Events arrive but replies fail | Inspect `reply()` results, server-key validity, public-app authorization, and whether the triggering player is still in-game. |
+| HTTP 401 or 403 | Check credentials and restrictions. The ingest URL is not a Poll credential. |
+| Handler runs again after restart | Duplicate tracking is in memory. Store your own processed-event IDs if repeated side effects would be harmful. |
+| Connection is suspended | Check the dashboard restriction message; retrying cannot override an admin restriction. |
 
-- Use `webhook.events()` for Liberty Tools Poll mode.
-- Use `webhook.verify()` when your own application directly receives signed POST requests from ER:LC.
-- Easy and Proxy modes deliver to the destination configured in the dashboard and do not need `webhook.events()`.
-
-## Testing
-
-```bash
-npm test
-```
-
-For contributor checks, install development dependencies with `npm ci`, then run
-`npm run check`. This runs the runtime suite and strict TypeScript consumer checks
-using both NodeNext and Bundler module resolution. Type checks make no API calls.
+For help, use the [support Discord](https://discord.gg/YFjuXJcnVC). Report vulnerabilities privately using [SECURITY.md](SECURITY.md). To contribute or run checks, see [CONTRIBUTING.md](CONTRIBUTING.md).

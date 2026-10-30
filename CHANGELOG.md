@@ -1,5 +1,8 @@
 # Changelog
 
+This file records release history. For current setup, see the [README](readme.md).
+For known limitations and planned fixes, see the [roadmap](ROADMAP.md).
+
 ## 1.3.0
 
 Stable release of the command router, TypeScript declarations, and v2 Poll
