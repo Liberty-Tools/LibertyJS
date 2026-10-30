@@ -139,7 +139,7 @@ Replies and announcements allow up to 200 characters and replace line breaks wit
 
 **Known 1.3.0 issue:** when a handler has a cooldown, a failed event may be acknowledged on its next delivery without retrying. Avoid cooldowns for handlers that depend on retrying failures until this is fixed. See the [roadmap](ROADMAP.md).
 
-For repository examples, see [easy-commands.mjs](examples/easy-commands.mjs) and [quick-test.mjs](examples/quick-test.mjs). Both log failed actions instead of throwing for retry. After cloning the repository and installing dependencies, `npm run example:commands` starts the `;libertytest` example.
+For repository examples, see [easy-commands.mjs](examples/easy-commands.mjs) and [quick-test.mjs](examples/quick-test.mjs). These examples log failed replies and do not retry them. The handler completes, so the Poll event is acknowledged even if the reply failed. After cloning the repository and installing dependencies, `npm run example:commands` starts the `;libertytest` example.
 
 ## API reference
 
@@ -196,6 +196,13 @@ if (page?.error) throw new Error(page.message);
 if (!page || !Array.isArray(page.events)) throw new Error("Unexpected Poll response");
 
 for (const event of page.events) {
+    if (!event || typeof event !== "object" || Array.isArray(event) ||
+        typeof event.id !== "string" || !event.id.trim() ||
+        typeof event.type !== "string" || !event.type.trim()) {
+        // Leave malformed events unacknowledged for investigation.
+        console.error("Skipping a malformed Poll event");
+        continue;
+    }
     // Process the event successfully before acknowledging it.
     console.log(event.type, event.id);
     const result = await erlc.webhook.acknowledge([event.id]);
