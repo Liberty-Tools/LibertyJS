@@ -281,3 +281,7 @@ Options, method signatures, command contexts, and result summaries are typed. Ra
 | Connection is suspended | Check the dashboard restriction message; retrying cannot override an admin restriction. |
 
 For help, use the [support Discord](https://discord.gg/YFjuXJcnVC). Report vulnerabilities privately using [SECURITY.md](SECURITY.md). To contribute or run checks, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+LibertyJS is licensed under the [ISC License](LICENSE.md).
