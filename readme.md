@@ -4,7 +4,13 @@ LibertyJS is a JavaScript SDK for building bots and integrations with the ERLC A
 
 LibertyJS runs in **Node.js**, including TypeScript projects. It does not run inside Roblox or in a browser. Your application must stay running to receive events.
 
-[Website and guides](https://libertytools.dev/) · [Dashboard](https://dash.libertytools.dev/) · [Support Discord](https://discord.gg/YFjuXJcnVC) · [Changelog](CHANGELOG.md)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/YFjuXJcnVC)
+[![npm](https://img.shields.io/npm/v/@libertytools/libertyjs)](https://www.npmjs.com/package/@libertytools/libertyjs)
+[![downloads](https://img.shields.io/npm/dm/@libertytools/libertyjs)](https://www.npmjs.com/package/@libertytools/libertyjs)
+[![Website](https://img.shields.io/badge/Website-LibertyTools-008b9a)](https://libertytools.dev/)
+[![Dashboard](https://img.shields.io/badge/Dashboard-Open-008b9a)](https://dash.libertytools.dev/)
+
+[Changelog](CHANGELOG.md)
 
 ## Choose what you need
 
