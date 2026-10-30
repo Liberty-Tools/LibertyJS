@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in this project (**not our webhook service**), **do not** open a public GitHub issue. Instead, report it privately using one of the following methods:
 
-- Email: [novix@libertytools.dev](mailto:novix@libertytools.dev)  
+- Email: [admin@libertytools.dev](mailto:admin@libertytools.dev)  
 - GitHub Security Report (**not a regular issue**)
 
 Please include:
