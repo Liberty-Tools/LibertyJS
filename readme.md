@@ -137,7 +137,7 @@ Replies and announcements allow up to 200 characters and replace line breaks wit
 - Duplicate tracking is limited to the current process and a bounded cache. It is not a guarantee of exactly-once execution across restarts.
 - `commands.stop()` aborts Poll requests and waits up to 10 seconds for active work. It cannot forcibly cancel your handler.
 
-**Known 1.3.0 issue:** when a handler has a cooldown, a failed event may be acknowledged on its next delivery without retrying. Avoid cooldowns for handlers that depend on retrying failures until this is fixed. See the [roadmap](ROADMAP.md).
+Failed handlers release their own cooldown reservation so Poll can retry them. If another command has since acquired that cooldown, the failed event stays pending until it can run. Concurrent deliveries of the same event wait for the active attempt. Retry and duplicate history share the bounded, in-memory event cache; neither survives a restart. These fixes are unreleased; npm 1.3.0 still has the cooldown-retry bug tracked in [issue #6](https://github.com/Liberty-Tools/LibertyJS/issues/6).
 
 For repository examples, see [easy-commands.mjs](examples/easy-commands.mjs) and [quick-test.mjs](examples/quick-test.mjs). These examples log failed replies and do not retry them. The handler completes, so the Poll event is acknowledged even if the reply failed. After cloning the repository and installing dependencies, `npm run example:commands` starts the `;libertytest` example.
 

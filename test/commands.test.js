@@ -187,12 +187,105 @@ test("failed handlers remain pending and are retried before acknowledgement", as
     router.command("help", () => {
         attempts++;
         if (attempts === 1) throw new Error("temporary failure");
-    });
+    }, { cooldown: 10_000 });
     await router.start({ pollInterval: 100 });
     await finished;
     await router.stop();
     assert.equal(attempts, 2);
     assert.deepEqual(acknowledgements, [["event-1"]]);
+});
+
+test("permanent handler failures with cooldowns stay pending between Poll reads", async () => {
+    let polls = 0;
+    let attempts = 0;
+    const acknowledgements = [];
+    const controller = new AbortController();
+    const router = new CommandRouter({
+        pollEvents: async () => {
+            if (++polls === 4) controller.abort();
+            return { events: [customCommand({ id: "permanent" })] };
+        },
+        acknowledgeEvents: async ids => { acknowledgements.push(ids); }
+    });
+    router.command("help", () => { attempts++; throw new Error("still unavailable"); }, { cooldown: 10_000 });
+    try {
+        await router.start({ pollInterval: 100, signal: controller.signal });
+        while (router.running) await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(attempts, 3);
+        assert.deepEqual(acknowledgements, []);
+    } finally {
+        await router.stop();
+    }
+});
+
+test("acknowledgement failure does not rerun a successful handler", async () => {
+    let attempts = 0;
+    let acks = 0;
+    const controller = new AbortController();
+    const router = new CommandRouter({
+        pollEvents: async () => ({ events: [customCommand({ id: "ack-retry" })] }),
+        acknowledgeEvents: async () => {
+            if (++acks === 1) return { error: "network-error" };
+            controller.abort();
+            return { acknowledged: ["ack-retry"] };
+        }
+    });
+    router.command("help", () => { attempts++; }, { cooldown: 10_000 });
+    try {
+        await router.start({ pollInterval: 100, signal: controller.signal });
+        while (router.running) await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(attempts, 1);
+        assert.equal(acks, 2);
+    } finally {
+        await router.stop();
+    }
+});
+
+test("concurrent duplicate deliveries wait for the original failure", async () => {
+    let rejectHandler;
+    let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    let attempts = 0;
+    const router = new CommandRouter();
+    router.command("help", () => {
+        attempts++;
+        started();
+        return new Promise((resolve, reject) => { rejectHandler = reject; });
+    }, { cooldown: 10_000 });
+    const original = router.handle(customCommand());
+    await ready;
+    const duplicate = router.handle(customCommand());
+    rejectHandler(new Error("temporary failure"));
+    assert.equal((await original).status, "failed");
+    assert.equal((await duplicate).status, "failed");
+    assert.equal(attempts, 1);
+});
+
+test("an older failure cannot clear a newer cooldown or be acknowledged by it", async t => {
+    let now = 1_000;
+    t.mock.method(Date, "now", () => now);
+    let rejectFirst;
+    let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    let firstAttempts = 0;
+    const router = new CommandRouter();
+    router.command("help", context => {
+        if (context.event.id === "older" && ++firstAttempts === 1) {
+            started();
+            return new Promise((resolve, reject) => { rejectFirst = reject; });
+        }
+    }, { cooldown: 100 });
+    const older = router.handle(customCommand({ id: "older" }));
+    await ready;
+    now = 1_200;
+    assert.equal((await router.handle(customCommand({ id: "newer" }))).status, "handled");
+    rejectFirst(new Error("late failure"));
+    assert.equal((await older).status, "failed");
+    assert.equal((await router.handle(customCommand({ id: "older" }))).status, "failed");
+    assert.equal((await router.handle(customCommand({ id: "third" }))).status, "cooldown");
+    now = 1_400;
+    assert.equal((await router.handle(customCommand({ id: "older" }))).status, "handled");
+    assert.equal(firstAttempts, 2);
 });
 
 test("v2 Poll listEvents passes cursor and limit to the gateway", async () => {

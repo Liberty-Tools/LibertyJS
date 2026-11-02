@@ -141,8 +141,8 @@ function abortableWait(milliseconds, signal) {
 export class CommandRouter extends EventEmitter {
     #handlers = new Map();
     #cooldowns = new Map();
-    #seenEvents = new Set();
-    #seenOrder = [];
+    #seenEvents = new Map();
+    #inFlight = new Map();
     #pollEvents;
     #acknowledgeEvents;
     #sendCommands;
@@ -196,14 +196,32 @@ export class CommandRouter extends EventEmitter {
     async handle(input) {
         const event = normalizeEvent(input);
         if (!event) return { status: "ignored", reason: "unsupported_event" };
-        if (this.#seenEvents.has(event.id)) {
+        const active = this.#inFlight.get(event.id);
+        if (active) {
+            const result = await active;
+            return result.status === "failed" ? result
+                : { status: "duplicate", eventId: event.id, command: event.command };
+        }
+        // Register before invoking user code, including synchronous handlers.
+        const attempt = Promise.resolve().then(() => this.#handleEvent(event));
+        this.#inFlight.set(event.id, attempt);
+        try {
+            return await attempt;
+        } finally {
+            this.#inFlight.delete(event.id);
+        }
+    }
+
+    async #handleEvent(event) {
+        const previous = this.#seenEvents.get(event.id);
+        if (previous && previous.status !== "failed") {
             return { status: "duplicate", eventId: event.id, command: event.command };
         }
 
-        this.#rememberEvent(event.id);
         const registration = this.#handlers.get(event.command);
         if (!registration) {
             const result = { status: "unhandled", eventId: event.id, command: event.command };
+            this.#rememberEvent(event.id, result);
             this.emit("unhandled", result);
             return result;
         }
@@ -211,38 +229,42 @@ export class CommandRouter extends EventEmitter {
         const cooldownKey = `${event.command}:${event.userId || "unknown"}`;
         const now = Date.now();
         if (++this.#cooldownChecks % 100 === 0) {
-            for (const [key, expiresAt] of this.#cooldowns) {
-                if (expiresAt <= now) this.#cooldowns.delete(key);
+            for (const [key, reservation] of this.#cooldowns) {
+                if (reservation.expiresAt <= now) this.#cooldowns.delete(key);
             }
         }
-        const availableAt = this.#cooldowns.get(cooldownKey) ?? 0;
+        const availableAt = this.#cooldowns.get(cooldownKey)?.expiresAt ?? 0;
         if (availableAt <= now) this.#cooldowns.delete(cooldownKey);
         if (availableAt > now) {
+            // A later successful command may own this cooldown. Keep an earlier
+            // failed event pending until it can retry rather than acknowledging it.
+            if (previous?.status === "failed") return previous;
             const result = {
                 status: "cooldown",
                 eventId: event.id,
                 command: event.command,
                 remaining: availableAt - now
             };
+            this.#rememberEvent(event.id, result);
             this.emit("cooldown", result);
             return result;
         }
-        if (registration.cooldown > 0) {
-            this.#cooldowns.set(cooldownKey, now + registration.cooldown);
-        }
+        const reservation = { expiresAt: now + registration.cooldown };
+        if (registration.cooldown > 0) this.#cooldowns.set(cooldownKey, reservation);
 
         const context = this.#createContext(event);
         try {
             const value = await registration.handler(context);
             const result = { status: "handled", eventId: event.id, command: event.command, value };
+            this.#rememberEvent(event.id, { status: "handled" });
             this.emit("handled", result);
             return result;
         } catch (error) {
-            // A failed handler must remain eligible for a later Poll delivery.
-            this.#seenEvents.delete(event.id);
-            const seenIndex = this.#seenOrder.indexOf(event.id);
-            if (seenIndex !== -1) this.#seenOrder.splice(seenIndex, 1);
+            // Release only this attempt's reservation; a newer attempt may have
+            // acquired the cooldown while a slow handler was still running.
+            if (this.#cooldowns.get(cooldownKey) === reservation) this.#cooldowns.delete(cooldownKey);
             const result = { status: "failed", eventId: event.id, command: event.command, error };
+            this.#rememberEvent(event.id, result);
             this.emit("commandError", result);
             return result;
         }
@@ -319,12 +341,12 @@ export class CommandRouter extends EventEmitter {
         }
     }
 
-    #rememberEvent(id) {
-        this.#seenEvents.add(id);
-        this.#seenOrder.push(id);
-        if (this.#seenOrder.length <= this.#maxSeenEvents) return;
-        const removed = this.#seenOrder.shift();
-        if (removed) this.#seenEvents.delete(removed);
+    #rememberEvent(id, result) {
+        this.#seenEvents.delete(id);
+        this.#seenEvents.set(id, result);
+        if (this.#seenEvents.size > this.#maxSeenEvents) {
+            this.#seenEvents.delete(this.#seenEvents.keys().next().value);
+        }
     }
 
     #createContext(event) {

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Failed command handlers release only their own cooldown reservation and remain pending during a newer cooldown. Concurrent duplicate deliveries wait for the original outcome; successful handlers are not rerun after an acknowledgement failure.
+
 This file records release history. For current setup, see the [README](readme.md).
 For known limitations and planned fixes, see the [roadmap](ROADMAP.md).
 
