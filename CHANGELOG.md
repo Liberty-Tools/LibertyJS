@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Incomplete or malformed successful HTTP responses report an error instead of falsely counting commands as successful. Ambiguous commands are not automatically replayed; empty responses remain supported.
 - Direct signed webhook handling unpacks ERLC event batches, maps origin and server identity, rejects malformed batches before partial processing, and returns ordered per-event results. Single-event runtime results remain unchanged; TypeScript webhook callers can use the new `CommandWebhookResult` union.
 - Failed command handlers release only their own cooldown reservation and remain pending during a newer cooldown. Concurrent duplicate deliveries wait for the original outcome; successful handlers are not rerun after an acknowledgement failure.
 - Scope authentication failures and resets to ERLC requests so valid LibertyTools Poll reads, acknowledgements, and health calls remain independent.

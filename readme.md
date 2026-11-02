@@ -272,6 +272,8 @@ For a LibertyTools signed forward, verify the gateway signature in your receiver
 
 HTTP and network failures normally return an object with `error` and `message`. HTTP errors also include `status`, `statusText`, `headers`, `apiResponse`, and optional `code` and `retryAfter` fields. Configuration mistakes and invalid method options can throw.
 
+An incomplete response or a nonempty successful response containing invalid JSON returns a `network-error` instead of reporting success. A command may already have reached ERLC when its response is lost, so the SDK does not automatically resend it. Empty successful responses remain supported. Non-JSON HTTP errors still preserve their status and retry headers.
+
 HTTP 429 responses trigger a bounded retry using `Retry-After`, then `retry_after` from the body or `X-RateLimit-Reset`. Other failures are not automatically retried. Instances sharing an ERLC key coordinate API requests within the same process; this does not coordinate separate processes or machines.
 
 After three recognized ERLC authentication failures, the instance stops making ERLC requests. A successful ERLC response before that threshold resets the counter; relay responses do not affect it. Correct the credentials and create a new instance after the cutoff. Poll reads, acknowledgements, and relay health remain independent. Server queries and remote commands have no configurable SDK timeout yet; see the [known issues](ROADMAP.md#fixes-to-prioritize).

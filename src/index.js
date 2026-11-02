@@ -289,14 +289,31 @@ export default class LibertyJS {
                 };
             }
 
+            if (isERLC) this.#readRateLimit(res, routeKey);
+
             let data = null;
             try {
-                data = await res.json();
+                const responseBody = await res.text();
+                if (responseBody.trim()) {
+                    try {
+                        data = JSON.parse(responseBody);
+                    } catch {
+                        // Preserve HTTP errors and Retry-After even if a proxy
+                        // returns HTML. A nonempty successful response must be JSON.
+                        if (res.ok) return {
+                            error: "network-error",
+                            message: `[LibertyJS]: ${isERLC ? "ER:LC API" : "Webhook relay"} returned invalid JSON`
+                        };
+                    }
+                }
             } catch {
-                // Some valid responses may not include a JSON body.
+                // The request may already have taken effect. Report uncertainty
+                // without retrying it or claiming an unread response was success.
+                return {
+                    error: "network-error",
+                    message: `[LibertyJS]: Could not read the complete ${isERLC ? "ER:LC API" : "webhook relay"} response`
+                };
             }
-
-            if (isERLC) this.#readRateLimit(res, routeKey);
 
             if (res.status === 429 && attempt < this.#maxRateLimitRetries) {
                 await this.#wait(this.#retryAfterMilliseconds(res, data), options.signal);
