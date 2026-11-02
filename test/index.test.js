@@ -227,6 +227,73 @@ test("verifies official Ed25519 webhook signing format over timestamp + raw body
     assert.equal(sdk.webhook.verify({ timestamp: oldTimestamp, signature: oldSignature, rawBody }), false);
 });
 
+test("Poll traffic stays independent of the ERLC authentication circuit", async () => {
+    let erlcCalls = 0;
+    let relayCalls = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "isolated-server-secret", GLOBAL_API_KEY: "isolated-global-secret",
+        POLL_SUBSCRIPTION_ID: "sub_isolated", POLL_TOKEN: "ltp_isolated",
+        FETCH: async (url, options) => {
+            if (url.hostname === "api.erlc.gg") {
+                erlcCalls++;
+                assert.equal(options.headers.get("server-key"), "isolated-server-secret");
+                assert.equal(options.headers.get("Authorization"), "isolated-global-secret");
+                return jsonResponse({ code: 2003 }, { status: 403 });
+            }
+            relayCalls++;
+            assert.equal(options.headers.has("server-key"), false);
+            assert.notEqual(options.headers.get("Authorization"), "isolated-global-secret");
+            if (url.pathname.endsWith("/health")) return jsonResponse({ ok: true });
+            assert.equal(options.headers.get("Authorization"), "Bearer ltp_isolated");
+            return jsonResponse(options.method === "POST" ? { acknowledged: ["evt_1"] } : { events: [] });
+        }
+    });
+    for (let index = 0; index < 3; index++) {
+        assert.equal((await sdk.getPrivateServerAPI()).status, 403);
+        assert.deepEqual(await sdk.webhook.events(), { events: [] });
+    }
+    const blocked = await sdk.getPrivateServerAPI();
+    assert.equal(blocked.error, "forbidden");
+    assert.equal(erlcCalls, 3);
+    assert.deepEqual(await sdk.webhook.acknowledge(["evt_1"]), { acknowledged: ["evt_1"] });
+    assert.deepEqual(await sdk.webhook.status(), { ok: true });
+    assert.equal(relayCalls, 5);
+    assert.equal(JSON.stringify(blocked).includes("isolated-server-secret"), false);
+    assert.equal(JSON.stringify(blocked).includes("isolated-global-secret"), false);
+});
+
+test("relay errors with ERLC-like codes do not open the ERLC circuit", async () => {
+    let erlcCalls = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "relay-errors-server", POLL_SUBSCRIPTION_ID: "sub_errors", POLL_TOKEN: "ltp_errors",
+        FETCH: async url => {
+            if (url.hostname !== "api.erlc.gg") return jsonResponse({ code: 2003 }, { status: 403 });
+            erlcCalls++;
+            return jsonResponse({ Name: "Available" });
+        }
+    });
+    for (let index = 0; index < 3; index++) assert.equal((await sdk.webhook.events()).status, 403);
+    assert.equal((await sdk.getPrivateServerAPI()).Name, "Available");
+    assert.equal(erlcCalls, 1);
+});
+
+test("a successful ERLC response resets its own authentication failure counter", async () => {
+    let calls = 0;
+    const sdk = new LibertyJS({
+        SERVER_KEY: "auth-reset-server",
+        FETCH: async () => {
+            calls++;
+            return calls === 3 ? jsonResponse({ Name: "Recovered" }) : jsonResponse({ code: 2002 }, { status: 403 });
+        }
+    });
+    await sdk.getPrivateServerAPI();
+    await sdk.getPrivateServerAPI();
+    assert.equal((await sdk.getPrivateServerAPI()).Name, "Recovered");
+    for (let index = 0; index < 3; index++) assert.equal((await sdk.getPrivateServerAPI()).status, 403);
+    assert.equal((await sdk.getPrivateServerAPI()).error, "forbidden");
+    assert.equal(calls, 6);
+});
+
 test("integrates directly with Liberty Tools dashboard webhook IDs", async () => {
     const calls = [];
     const sdk = new LibertyJS({

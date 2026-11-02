@@ -249,7 +249,7 @@ HTTP and network failures normally return an object with `error` and `message`. 
 
 HTTP 429 responses trigger a bounded retry using `Retry-After`, then `retry_after` from the body or `X-RateLimit-Reset`. Other failures are not automatically retried. Instances sharing an ERLC key coordinate API requests within the same process; this does not coordinate separate processes or machines.
 
-After three recognized ERLC authentication failures, the instance stops making requests. Correct the credentials and create a new instance. In 1.3.0 this also blocks its Poll calls. Server queries and remote commands have no configurable SDK timeout yet; see the [known issues](ROADMAP.md#fixes-to-prioritize).
+After three recognized ERLC authentication failures, the instance stops making ERLC requests. A successful ERLC response before that threshold resets the counter; relay responses do not affect it. Correct the credentials and create a new instance after the cutoff. Poll reads, acknowledgements, and relay health remain independent. This isolation fix is unreleased; npm 1.3.0 still blocks Poll after the cutoff. Server queries and remote commands have no configurable SDK timeout yet; see the [known issues](ROADMAP.md#fixes-to-prioritize).
 
 ## TypeScript
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Scope authentication failures and resets to ERLC requests so valid LibertyTools Poll reads, acknowledgements, and health calls remain independent.
+
 This file records release history. For current setup, see the [README](readme.md).
 For known limitations and planned fixes, see the [roadmap](ROADMAP.md).
 
