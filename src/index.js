@@ -246,7 +246,9 @@ export default class LibertyJS {
     }
 
     async #performFetchAPI(url, options = {}) {
-        if (this.#resStatus.forbiddenErrors >= 3) {
+        const targetURL = url instanceof URL ? url : new URL(url);
+        const isERLC = targetURL.origin === new URL(DEFAULT_API_URL).origin;
+        if (isERLC && this.#resStatus.forbiddenErrors >= 3) {
             return {
                 error: "forbidden",
                 message: "[LibertyJS]: Repeated authentication failures; API calls for this server key are suspended",
@@ -254,9 +256,7 @@ export default class LibertyJS {
             };
         }
 
-        const targetURL = url instanceof URL ? url : new URL(url);
         const method = (options.method || "GET").toUpperCase();
-        const isERLC = targetURL.origin === new URL(DEFAULT_API_URL).origin;
         const routeKey = `${method} ${targetURL.pathname}`;
         const headers = new Headers(options.headers || {});
         let body = options.body;
@@ -304,7 +304,7 @@ export default class LibertyJS {
             }
 
             if (!res.ok) {
-                const authenticationFailure = res.status === 403 && [2000, 2001, 2002, 2003, 2004].includes(data?.code);
+                const authenticationFailure = isERLC && res.status === 403 && [2000, 2001, 2002, 2003, 2004].includes(data?.code);
                 if (authenticationFailure) this.#resStatus.forbiddenErrors++;
 
                 return {
@@ -319,7 +319,7 @@ export default class LibertyJS {
                 };
             }
 
-            this.#resStatus.forbiddenErrors = 0;
+            if (isERLC) this.#resStatus.forbiddenErrors = 0;
             return data;
         }
     }
