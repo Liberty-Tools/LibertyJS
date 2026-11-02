@@ -137,7 +137,7 @@ Replies and announcements allow up to 200 characters and replace line breaks wit
 - Duplicate tracking is limited to the current process and a bounded cache. It is not a guarantee of exactly-once execution across restarts.
 - `commands.stop()` aborts Poll requests and waits up to 10 seconds for active work. It cannot forcibly cancel your handler.
 
-Failed handlers release their own cooldown reservation so Poll can retry them. If another command has since acquired that cooldown, the failed event stays pending until it can run. Concurrent deliveries of the same event wait for the active attempt. Retry and duplicate history share the bounded, in-memory event cache; neither survives a restart. These fixes are unreleased; npm 1.3.0 still has the cooldown-retry bug tracked in [issue #6](https://github.com/Liberty-Tools/LibertyJS/issues/6).
+Failed handlers release their own cooldown reservation so Poll can retry them. If another command has since acquired that cooldown, the failed event stays pending until it can run. Concurrent deliveries of the same event wait for the active attempt. Retry and duplicate history share the bounded, in-memory event cache; neither survives a restart.
 
 For repository examples, see [easy-commands.mjs](examples/easy-commands.mjs) and [quick-test.mjs](examples/quick-test.mjs). These examples log failed replies and do not retry them. The handler completes, so the Poll event is acknowledged even if the reply failed. After cloning the repository and installing dependencies, `npm run example:commands` starts the `;libertytest` example.
 
@@ -239,7 +239,7 @@ if (!valid) {
 
 This illustrates the SDK call, not a complete HTTP server. Your framework must supply the original request bytes and headers. Do not verify a parsed and re-serialized body. `webhook.verify()` is an alias; timestamps more than five minutes from the host clock are rejected.
 
-The unreleased `commands.handleWebhook()` fix verifies the exact signed body and routes either an individual event or an ERLC `{ events: [...], server: ... }` batch. It maps raw `origin` to the player ID and carries the outer server ID into each event. Malformed batches are rejected before any handlers run. Probes and unknown event types are ignored. npm 1.3.0 still needs manual batch splitting; this behavior becomes available after the milestone release.
+`commands.handleWebhook()` verifies the exact signed body and routes either an individual event or an ERLC `{ events: [...], server: ... }` batch. It maps raw `origin` to the player ID and carries the outer server ID into each event. Malformed batches are rejected before any handlers run. Probes and unknown event types are ignored.
 
 ```js
 const outcome = await erlc.commands.handleWebhook({
@@ -274,7 +274,7 @@ HTTP and network failures normally return an object with `error` and `message`. 
 
 HTTP 429 responses trigger a bounded retry using `Retry-After`, then `retry_after` from the body or `X-RateLimit-Reset`. Other failures are not automatically retried. Instances sharing an ERLC key coordinate API requests within the same process; this does not coordinate separate processes or machines.
 
-After three recognized ERLC authentication failures, the instance stops making ERLC requests. A successful ERLC response before that threshold resets the counter; relay responses do not affect it. Correct the credentials and create a new instance after the cutoff. Poll reads, acknowledgements, and relay health remain independent. This isolation fix is unreleased; npm 1.3.0 still blocks Poll after the cutoff. Server queries and remote commands have no configurable SDK timeout yet; see the [known issues](ROADMAP.md#fixes-to-prioritize).
+After three recognized ERLC authentication failures, the instance stops making ERLC requests. A successful ERLC response before that threshold resets the counter; relay responses do not affect it. Correct the credentials and create a new instance after the cutoff. Poll reads, acknowledgements, and relay health remain independent. Server queries and remote commands have no configurable SDK timeout yet; see the [known issues](ROADMAP.md#fixes-to-prioritize).
 
 ## TypeScript
 

@@ -13,9 +13,9 @@ This file tracks proposed SDK improvements, not available features or promised r
 
 Raw API and Poll responses are unvalidated JSON. Callers must check their shape before reading fields.
 
-## Milestone 1.3.1: implemented, awaiting release
+## Fixed in 1.3.1
 
-The milestone changes implement the following fixes. They are not yet available in the published 1.3.0 package:
+Version 1.3.1 includes the following fixes:
 
 - **Raw webhook batches:** verify the body once, validate the batch before processing, preserve player/server identities, and return per-event outcomes. Single events retain their runtime result shape.
 - **Retries with cooldowns:** release a failed attempt's reservation without clearing newer cooldowns; keep known failed work pending during a newer cooldown. Concurrent duplicate deliveries share the active outcome.
