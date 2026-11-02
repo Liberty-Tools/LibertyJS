@@ -56,7 +56,7 @@ function parseArguments(value) {
 }
 
 function normalizeEvent(input) {
-    if (!input || typeof input !== "object") return null;
+    if (!isRecord(input)) return null;
     const data = input.data && typeof input.data === "object" ? input.data : {};
     const type = String(input.event ?? input.type ?? data.event ?? data.type ?? "");
     if (type.toLowerCase() !== "customcommand") return null;
@@ -64,7 +64,7 @@ function normalizeEvent(input) {
     const command = normalizeCommandName(input.command ?? data.command);
     if (!command) return null;
     const argument = String(input.argument ?? data.argument ?? "");
-    const userId = String(input.userId ?? data.userId ?? data.userID ?? "");
+    const userId = String(input.userId ?? data.userId ?? data.userID ?? input.origin ?? "");
     const serverId = String(input.serverId ?? input.server ?? data.serverId ?? data.server ?? "");
     const id = String(input.id ?? input._id ?? createHash("sha256")
         .update(JSON.stringify(input))
@@ -83,6 +83,30 @@ function normalizeEvent(input) {
         receivedAt: input.createdAt ?? input.receivedAt ?? data.receivedAt,
         raw: input
     };
+}
+
+function isRecord(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isIdentity(value) {
+    return (typeof value === "string" && value.trim().length > 0) ||
+        (Number.isSafeInteger(value) && value >= 0);
+}
+
+function isWebhookEvent(value) {
+    if (!isRecord(value) || (value.data !== undefined && !isRecord(value.data))) return false;
+    const data = value.data ?? {};
+    const type = value.event ?? value.type ?? data.event ?? data.type;
+    if (typeof type !== "string" || !type.trim()) return false;
+    for (const id of [value.id, value._id, value.origin, value.userId, data.userId, data.userID,
+        value.serverId, value.server, data.serverId, data.server]) {
+        if (id !== undefined && !isIdentity(id)) return false;
+    }
+    if (type.toLowerCase() !== "customcommand") return true;
+    const argument = value.argument ?? data.argument;
+    return Boolean(normalizeCommandName(value.command ?? data.command)) &&
+        (argument === undefined || typeof argument === "string");
 }
 
 function extractUsername(input, data) {
@@ -271,18 +295,49 @@ export class CommandRouter extends EventEmitter {
     }
 
     async handleWebhook(input) {
-        if (typeof this.#verifyWebhook !== "function" || !this.#verifyWebhook(input)) {
+        let verified = false;
+        try {
+            verified = typeof this.#verifyWebhook === "function" && this.#verifyWebhook(input) === true;
+        } catch {
+            // A verifier error must never authorize a request.
+        }
+        if (!verified) {
             return { status: "rejected", reason: "invalid_signature" };
         }
+        let payload;
+        let bytes;
         try {
             const rawBody = input?.rawBody;
-            const bytes = typeof rawBody === "string"
+            bytes = typeof rawBody === "string"
                 ? rawBody
                 : Buffer.from(rawBody instanceof ArrayBuffer ? new Uint8Array(rawBody) : rawBody).toString("utf8");
-            return await this.handle(JSON.parse(bytes));
+            payload = JSON.parse(bytes);
         } catch {
             return { status: "rejected", reason: "invalid_json" };
         }
+        if (!isRecord(payload)) return { status: "rejected", reason: "invalid_payload" };
+        if (!Object.hasOwn(payload, "events")) return await this.handle(payload);
+
+        const serverId = isRecord(payload.server) ? payload.server.id : payload.server;
+        // Validate the entire envelope before invoking any handler. A malformed
+        // later entry must not cause a partially processed, rejected request.
+        if (!Array.isArray(payload.events) || !payload.events.every(isWebhookEvent) ||
+            (isRecord(payload.server) && !isIdentity(payload.server.id)) ||
+            (serverId !== undefined && !isIdentity(serverId))) {
+            return { status: "rejected", reason: "invalid_payload" };
+        }
+        const batchId = createHash("sha256").update(bytes).digest("hex");
+        const results = [];
+        for (const [index, event] of payload.events.entries()) {
+            results.push(await this.handle({
+                ...event,
+                // Include the position so two identical events in one batch
+                // stay distinct while an exact replay keeps the same IDs.
+                id: event.id ?? event._id ?? `${batchId}:${index}`,
+                serverId: event.serverId ?? event.server ?? event.data?.serverId ?? event.data?.server ?? serverId
+            }));
+        }
+        return { status: "batch", results };
     }
 
     async start({ pollInterval = DEFAULT_POLL_INTERVAL, signal } = {}) {

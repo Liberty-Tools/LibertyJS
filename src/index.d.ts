@@ -144,15 +144,25 @@ export interface CommandStopOptions {
     timeout?: number;
 }
 
-export type CommandHandleResult =
+export type CommandEventResult =
     | { status: "ignored"; reason: "unsupported_event" }
-    | { status: "rejected"; reason: "invalid_signature" | "invalid_json" }
+    | { status: "rejected"; reason: "invalid_signature" | "invalid_json" | "invalid_payload" }
     | { status: "duplicate" | "unhandled"; eventId: string; command: string }
     | { status: "cooldown"; eventId: string; command: string; remaining: number }
     | { status: "handled"; eventId: string; command: string; value: unknown }
     | { status: "failed"; eventId: string; command: string; error: unknown };
 
 export type CommandHandler = (context: CommandContext) => unknown | Promise<unknown>;
+
+/** Ordered results for a signed ERLC request containing an events array. */
+export interface CommandBatchResult {
+    status: "batch";
+    results: CommandEventResult[];
+}
+
+/** Retained result name; now also includes previously unsupported webhook batches. */
+export type CommandHandleResult = CommandEventResult | CommandBatchResult;
+export type CommandWebhookResult = CommandHandleResult;
 
 export class CommandRouter extends EventEmitter {
     constructor(options?: {
@@ -166,8 +176,8 @@ export class CommandRouter extends EventEmitter {
     readonly running: boolean;
     command(name: string, handler: CommandHandler, options?: CommandOptions): this;
     remove(name: string): boolean;
-    handle(event: unknown): Promise<CommandHandleResult>;
-    handleWebhook(input: WebhookVerificationInput): Promise<CommandHandleResult>;
+    handle(event: unknown): Promise<CommandEventResult>;
+    handleWebhook(input: WebhookVerificationInput): Promise<CommandWebhookResult>;
     start(options?: CommandStartOptions): Promise<this>;
     stop(options?: CommandStopOptions): Promise<void>;
 }

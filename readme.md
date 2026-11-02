@@ -239,7 +239,32 @@ if (!valid) {
 
 This illustrates the SDK call, not a complete HTTP server. Your framework must supply the original request bytes and headers. Do not verify a parsed and re-serialized body. `webhook.verify()` is an alias; timestamps more than five minutes from the host clock are rejected.
 
-**Known 1.3.0 limitation:** `commands.handleWebhook()` does not unpack raw ERLC event batches. For now, verify the body, validate and split its `events` array, and normalize each event before calling `commands.handle(event)`. In particular, map raw `origin` to `data.userId` and the outer `server` to `serverId`. Prefer Poll for the ready-to-use command flow above.
+The unreleased `commands.handleWebhook()` fix verifies the exact signed body and routes either an individual event or an ERLC `{ events: [...], server: ... }` batch. It maps raw `origin` to the player ID and carries the outer server ID into each event. Malformed batches are rejected before any handlers run. Probes and unknown event types are ignored. npm 1.3.0 still needs manual batch splitting; this behavior becomes available after the milestone release.
+
+```js
+const outcome = await erlc.commands.handleWebhook({
+    timestamp: request.headers["x-signature-timestamp"],
+    signature: request.headers["x-signature-ed25519"],
+    rawBody: request.rawBody
+});
+if (outcome.status === "rejected") {
+    // Respond with a 4xx status; do not process the body yourself.
+    console.error(outcome.reason);
+} else {
+    const results = outcome.status === "batch" ? outcome.results : [outcome];
+    if (results.some(result => result.status === "failed")) {
+        // Some work failed. Apply your receiver's retry policy instead of
+        // treating every event as successfully handled.
+        console.error("A command handler failed");
+    } else {
+        // Return a 2xx response, including for ignored validation probes.
+    }
+}
+```
+
+Batch results have the shape `{ status: "batch", results: [...] }`, with one result per input event in order. Single events keep their previous result shape. TypeScript callers can use `CommandWebhookResult` for `handleWebhook()` and `CommandEventResult` for one event. Existing `CommandHandleResult` annotations remain supported and now include the batch case; exhaustive result handling should account for that case. Rejected requests report `invalid_signature`, `invalid_json`, or `invalid_payload`. An empty batch returns an empty results array.
+
+Exact batch replays keep the same generated event IDs, including distinct IDs for identical entries at different positions. Successful events are skipped on replay within the bounded process-local cache; failed events can retry. A differently packaged batch or process restart may produce repeat side effects, so receivers still need application-level idempotency where it matters.
 
 For a LibertyTools signed forward, verify the gateway signature in your receiver before calling `commands.handle(event)` with its normalized event. LibertyJS 1.3.0 does not include that verifier. Never pass unauthenticated public request bodies directly to `handle()`.
 
