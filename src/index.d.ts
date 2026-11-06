@@ -116,7 +116,7 @@ export type CommandActionResult = CommandSummary | InputError | {
     error: "player_not_found" | "command_unavailable";
     message: string;
 } | (CommandSummary & {
-    /** ERLC rejected the command; see failures and failureReasons. */
+    /** ERLC acceptance could not be confirmed (rejected, or an uncertain outcome such as a network error). See failureReasons and results. */
     error: "command_failed";
     message: string;
 });

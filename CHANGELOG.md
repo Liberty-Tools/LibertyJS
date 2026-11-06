@@ -7,9 +7,10 @@ Bug-fix release. No new features beyond the `maxAttempts` setting that the retry
 ### Fixed
 
 - Failed command handlers back off before retrying (1s doubling to a 60s cap) and stop after `maxAttempts` (default 5). The final failure is acknowledged so a permanently broken handler no longer reruns every Poll interval. Failed results include `attempts`, `willRetry`, and `retryAt`.
-- `context.reply()` and `context.announce()` return `error: "command_failed"` when ERLC rejects the command, so a plain `result.error` check catches it. The existing `failures` and `failureReasons` fields are unchanged.
+- `context.reply()` and `context.announce()` return `error: "command_failed"` when LibertyJS cannot confirm ERLC accepted the command (a rejection, or an uncertain outcome such as a network error), so a plain `result.error` check catches it. The existing `failures` and `failureReasons` fields are unchanged.
 - Events that finished running before `commands.stop()` are still acknowledged during shutdown. Previously the stop signal canceled that acknowledgement, so a restart could run the same command again.
-- A failure waiting to retry is no longer pushed out of the bounded event history by newer events, which could reset its attempt count and exceed `maxAttempts` on busy servers.
+- Pending retries and finished events are tracked in separate bounded lists, so a burst of failures cannot erase the record that a command already ran, and finished events cannot reset a retry count. If the retry list is full, a new failure is final immediately rather than bypassing `maxAttempts`.
+- Rate-limit waits no longer end a millisecond early when a timer fires early (seen on Windows), which could send a request just before the limit reset.
 - `context.announce()` with an invalid message now returns a rejected promise, like `reply()`, instead of throwing synchronously.
 - Expired player-name cache entries are removed, so long-running bots no longer keep an entry for every player who ever used a reply.
 - The bundled examples catch a `stop()` timeout on Ctrl+C instead of crashing with an unhandled rejection.

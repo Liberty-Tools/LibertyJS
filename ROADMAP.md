@@ -25,7 +25,7 @@ Regression tests cover these fixes. Retry and duplicate history remain bounded a
 
 ## Fixed in 1.3.2
 
-- **Bounded retries:** failed handlers back off between attempts and stop after `maxAttempts`, then the event is acknowledged. Pending retries keep their attempt count even when the event history is full.
+- **Bounded retries:** failed handlers back off between attempts and stop after `maxAttempts`, then the event is acknowledged. Pending retries and finished events are tracked separately so neither can push the other out.
 - **Clear reply errors:** rejected replies and announcements return `error: "command_failed"`.
 - **Clean shutdown:** events that already ran are acknowledged even while `stop()` is in progress.
 - **Smaller fixes:** expired player-cache entries are removed, `announce()` rejects instead of throwing synchronously, and the examples handle a `stop()` timeout.

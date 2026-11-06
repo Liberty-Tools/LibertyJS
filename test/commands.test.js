@@ -528,6 +528,47 @@ test("pending retries survive eviction from the bounded event history", async t 
     assert.equal(attempts, 2);
 });
 
+test("a full retry list cannot let failures bypass maxAttempts through Poll", async t => {
+    let now = 1_000;
+    t.mock.method(Date, "now", () => now);
+    const pending = new Set(["f1", "f2", "f3"]);
+    const runs = {};
+    let polls = 0;
+    const controller = new AbortController();
+    const router = new CommandRouter({
+        maxSeenEvents: 2,
+        // Fake gateway: returns every unacknowledged event on each read.
+        pollEvents: async () => {
+            if (++polls === 10 || pending.size === 0) controller.abort();
+            now += 120_000;
+            return { events: [...pending].map(id => customCommand({ id, command: "fail", userId: id })) };
+        },
+        acknowledgeEvents: async ids => { for (const id of ids) pending.delete(id); return { acknowledged: ids }; }
+    });
+    router.command("fail", context => { runs[context.event.id] = (runs[context.event.id] ?? 0) + 1; throw new Error("down"); }, { maxAttempts: 2 });
+    try {
+        await router.start({ pollInterval: 100, signal: controller.signal });
+        while (router.running) await new Promise(resolve => setTimeout(resolve, 10));
+        // Two events get retry slots; the third fails once and is finalized immediately.
+        assert.deepEqual(runs, { f1: 2, f2: 2, f3: 1 });
+        assert.equal(pending.size, 0);
+    } finally {
+        await router.stop();
+    }
+});
+
+test("pending failures cannot push a finished event out of the history", async () => {
+    let successes = 0;
+    const router = new CommandRouter({ maxSeenEvents: 2 });
+    router.command("fail", () => { throw new Error("down"); });
+    router.command("help", () => { successes++; });
+    await router.handle(customCommand({ id: "f1", command: "fail" }));
+    await router.handle(customCommand({ id: "f2", command: "fail" }));
+    assert.equal((await router.handle(customCommand({ id: "s1" }))).status, "handled");
+    assert.equal((await router.handle(customCommand({ id: "s1" }))).status, "duplicate");
+    assert.equal(successes, 1);
+});
+
 test("announce rejects an invalid message instead of throwing synchronously", async () => {
     const router = new CommandRouter({ sendCommands: async () => ({ successes: 1, failures: 0, failureReasons: [], results: [] }) });
     let returned;

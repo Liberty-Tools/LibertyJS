@@ -173,6 +173,7 @@ export class CommandRouter extends EventEmitter {
     #handlers = new Map();
     #cooldowns = new Map();
     #seenEvents = new Map();
+    #pendingRetries = new Map();
     #inFlight = new Map();
     #pollEvents;
     #acknowledgeEvents;
@@ -247,7 +248,7 @@ export class CommandRouter extends EventEmitter {
     }
 
     async #handleEvent(event) {
-        const previous = this.#seenEvents.get(event.id);
+        const previous = this.#pendingRetries.get(event.id) ?? this.#seenEvents.get(event.id);
         if (previous && previous.status !== "failed") {
             return { status: "duplicate", eventId: event.id, command: event.command };
         }
@@ -303,7 +304,10 @@ export class CommandRouter extends EventEmitter {
             // acquired the cooldown while a slow handler was still running.
             if (this.#cooldowns.get(cooldownKey) === reservation) this.#cooldowns.delete(cooldownKey);
             const attempts = (previous?.status === "failed" ? previous.attempts ?? 1 : 0) + 1;
-            const willRetry = attempts < registration.maxAttempts;
+            // When the retry list is full, a new failure is final rather than evicting
+            // another event's attempt count (which would let it bypass maxAttempts).
+            const retrySlot = this.#pendingRetries.has(event.id) || this.#pendingRetries.size < this.#maxSeenEvents;
+            const willRetry = attempts < registration.maxAttempts && retrySlot;
             const result = {
                 status: "failed",
                 eventId: event.id,
@@ -421,17 +425,21 @@ export class CommandRouter extends EventEmitter {
         }
     }
 
+    // Finished events and pending retries are kept in separate bounded maps so
+    // neither can push the other out: a burst of failures cannot erase the record
+    // that a command already ran, and finished work cannot reset a retry count.
     #rememberEvent(id, result) {
+        if (result.status === "failed" && result.willRetry) {
+            this.#seenEvents.delete(id);
+            this.#pendingRetries.set(id, result); // capacity is checked before willRetry is set
+            return;
+        }
+        this.#pendingRetries.delete(id);
         this.#seenEvents.delete(id);
         this.#seenEvents.set(id, result);
-        if (this.#seenEvents.size <= this.#maxSeenEvents) return;
-        // Evict the oldest finished entry. A failure still waiting to retry keeps
-        // its attempt count, so busy servers cannot reset the maxAttempts limit.
-        let victim;
-        for (const [key, entry] of this.#seenEvents) {
-            if (!(entry.status === "failed" && entry.willRetry)) { victim = key; break; }
+        if (this.#seenEvents.size > this.#maxSeenEvents) {
+            this.#seenEvents.delete(this.#seenEvents.keys().next().value);
         }
-        this.#seenEvents.delete(victim ?? this.#seenEvents.keys().next().value);
     }
 
     #createContext(event) {
@@ -495,7 +503,9 @@ export class CommandRouter extends EventEmitter {
             return {
                 ...result,
                 error: "command_failed",
-                message: "[LibertyJS.commands]: ER:LC did not accept the command"
+                // Not "rejected": network errors and unreadable responses also count as
+                // failures, and the command may already have run. Do not blindly resend.
+                message: "[LibertyJS.commands]: Could not confirm that ER:LC accepted the command; see failureReasons and results"
             };
         }
         return result;
