@@ -6,6 +6,13 @@ const DEFAULT_SHUTDOWN_TIMEOUT = 10_000;
 const DEFAULT_MAX_SEEN_EVENTS = 1_000;
 const MAX_MESSAGE_LENGTH = 200;
 const PLAYER_CACHE_TTL = 10_000;
+const DEFAULT_MAX_ATTEMPTS = 5;
+const RETRY_BASE_DELAY = 1_000;
+const RETRY_MAX_DELAY = 60_000;
+
+function retryDelay(attempts) {
+    return Math.min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * (2 ** (attempts - 1)));
+}
 
 function normalizeCommandName(value) {
     if (typeof value !== "string") return "";
@@ -166,6 +173,7 @@ export class CommandRouter extends EventEmitter {
     #handlers = new Map();
     #cooldowns = new Map();
     #seenEvents = new Map();
+    #pendingRetries = new Map();
     #inFlight = new Map();
     #pollEvents;
     #acknowledgeEvents;
@@ -197,7 +205,7 @@ export class CommandRouter extends EventEmitter {
         return this.#running;
     }
 
-    command(name, handler, { cooldown = 0 } = {}) {
+    command(name, handler, { cooldown = 0, maxAttempts = DEFAULT_MAX_ATTEMPTS } = {}) {
         const normalized = normalizeCommandName(name);
         if (!normalized) {
             throw new Error("[LibertyJS.commands]: Command name must be a non-empty name without whitespace");
@@ -208,7 +216,10 @@ export class CommandRouter extends EventEmitter {
         if (!Number.isFinite(cooldown) || cooldown < 0) {
             throw new Error("[LibertyJS.commands]: cooldown must be a non-negative number of milliseconds");
         }
-        this.#handlers.set(normalized, { handler, cooldown });
+        if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+            throw new Error("[LibertyJS.commands]: maxAttempts must be a positive integer");
+        }
+        this.#handlers.set(normalized, { handler, cooldown, maxAttempts });
         return this;
     }
 
@@ -237,9 +248,14 @@ export class CommandRouter extends EventEmitter {
     }
 
     async #handleEvent(event) {
-        const previous = this.#seenEvents.get(event.id);
+        const previous = this.#pendingRetries.get(event.id) ?? this.#seenEvents.get(event.id);
         if (previous && previous.status !== "failed") {
             return { status: "duplicate", eventId: event.id, command: event.command };
+        }
+        // A failed event is not rerun after its final attempt or before its
+        // backoff delay ends. Poll fetches it again without repeating side effects.
+        if (previous?.status === "failed" && (!previous.willRetry || previous.retryAt > Date.now())) {
+            return previous;
         }
 
         const registration = this.#handlers.get(event.command);
@@ -287,7 +303,20 @@ export class CommandRouter extends EventEmitter {
             // Release only this attempt's reservation; a newer attempt may have
             // acquired the cooldown while a slow handler was still running.
             if (this.#cooldowns.get(cooldownKey) === reservation) this.#cooldowns.delete(cooldownKey);
-            const result = { status: "failed", eventId: event.id, command: event.command, error };
+            const attempts = (previous?.status === "failed" ? previous.attempts ?? 1 : 0) + 1;
+            // When the retry list is full, a new failure is final rather than evicting
+            // another event's attempt count (which would let it bypass maxAttempts).
+            const retrySlot = this.#pendingRetries.has(event.id) || this.#pendingRetries.size < this.#maxSeenEvents;
+            const willRetry = attempts < registration.maxAttempts && retrySlot;
+            const result = {
+                status: "failed",
+                eventId: event.id,
+                command: event.command,
+                error,
+                attempts,
+                willRetry,
+                retryAt: willRetry ? Date.now() + retryDelay(attempts) : undefined
+            };
             this.#rememberEvent(event.id, result);
             this.emit("commandError", result);
             return result;
@@ -396,7 +425,16 @@ export class CommandRouter extends EventEmitter {
         }
     }
 
+    // Finished events and pending retries are kept in separate bounded maps so
+    // neither can push the other out: a burst of failures cannot erase the record
+    // that a command already ran, and finished work cannot reset a retry count.
     #rememberEvent(id, result) {
+        if (result.status === "failed" && result.willRetry) {
+            this.#seenEvents.delete(id);
+            this.#pendingRetries.set(id, result); // capacity is checked before willRetry is set
+            return;
+        }
+        this.#pendingRetries.delete(id);
         this.#seenEvents.delete(id);
         this.#seenEvents.set(id, result);
         if (this.#seenEvents.size > this.#maxSeenEvents) {
@@ -413,7 +451,8 @@ export class CommandRouter extends EventEmitter {
             userId: event.userId,
             serverId: event.serverId,
             reply: message => this.#reply(event, message),
-            announce: message => this.#runCommand(`:h ${sanitizeMessage(message)}`)
+            // Async so an invalid message rejects like reply() instead of throwing synchronously.
+            announce: async message => await this.#runCommand(`:h ${sanitizeMessage(message)}`)
         };
     }
 
@@ -442,7 +481,12 @@ export class CommandRouter extends EventEmitter {
             const identity = playerIdentity(entry);
             const username = safeUsername(identity?.username);
             if (identity?.userId === userId && username) {
-                this.#playerCache.set(userId, { username, expiresAt: Date.now() + PLAYER_CACHE_TTL });
+                // Drop expired entries so a long-running bot does not keep every past player.
+                const now = Date.now();
+                for (const [id, entry] of this.#playerCache) {
+                    if (entry.expiresAt <= now) this.#playerCache.delete(id);
+                }
+                this.#playerCache.set(userId, { username, expiresAt: now + PLAYER_CACHE_TTL });
                 return username;
             }
         }
@@ -453,7 +497,18 @@ export class CommandRouter extends EventEmitter {
         if (typeof this.#sendCommands !== "function") {
             return { error: "command_unavailable", message: "[LibertyJS.commands]: Command transport is not configured" };
         }
-        return await this.#sendCommands([command]);
+        const result = await this.#sendCommands([command]);
+        // Surface a rejected command as an error so `if (result.error)` checks work.
+        if (result && !result.error && result.failures > 0) {
+            return {
+                ...result,
+                error: "command_failed",
+                // Not "rejected": network errors and unreadable responses also count as
+                // failures, and the command may already have run. Do not blindly resend.
+                message: "[LibertyJS.commands]: Could not confirm that ER:LC accepted the command; see failureReasons and results"
+            };
+        }
+        return result;
     }
 
     async #pollLoop(pollInterval, signal) {
@@ -481,13 +536,17 @@ export class CommandRouter extends EventEmitter {
                             for (const event of events) {
                                 if (signal.aborted) break;
                                 const result = await this.handle(event);
-                                if (result.status !== "failed" && event && typeof event === "object" && typeof event.id === "string") {
+                                // Retryable failures stay pending; a final failure is acknowledged.
+                                const finished = result.status !== "failed" || result.willRetry === false;
+                                if (finished && event && typeof event === "object" && typeof event.id === "string") {
                                     acknowledged.push(event.id);
                                 }
                             }
                             if (acknowledged.length && typeof this.#acknowledgeEvents === "function") {
-                                const result = await this.#acknowledgeEvents(acknowledged, { signal });
-                                if (result?.error && !signal.aborted) this.emit("pollError", {
+                                // Not tied to the stop signal: work that already ran must still be
+                                // acknowledged during shutdown, or a restart would run it again.
+                                const result = await this.#acknowledgeEvents(acknowledged);
+                                if (result?.error) this.emit("pollError", {
                                     error: new Error(`[LibertyJS.commands]: Poll acknowledgement failed (${result.error})`)
                                 });
                             }

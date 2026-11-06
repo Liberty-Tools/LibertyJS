@@ -115,7 +115,11 @@ export interface CustomCommandEvent {
 export type CommandActionResult = CommandSummary | InputError | {
     error: "player_not_found" | "command_unavailable";
     message: string;
-};
+} | (CommandSummary & {
+    /** ERLC acceptance could not be confirmed (rejected, or an uncertain outcome such as a network error). See failureReasons and results. */
+    error: "command_failed";
+    message: string;
+});
 
 export interface CommandContext {
     event: CustomCommandEvent;
@@ -131,6 +135,8 @@ export interface CommandContext {
 export interface CommandOptions {
     /** Per-player cooldown in milliseconds. */
     cooldown?: number;
+    /** Total handler runs for one event, including the first. Defaults to 5. */
+    maxAttempts?: number;
 }
 
 export interface CommandStartOptions {
@@ -150,7 +156,18 @@ export type CommandEventResult =
     | { status: "duplicate" | "unhandled"; eventId: string; command: string }
     | { status: "cooldown"; eventId: string; command: string; remaining: number }
     | { status: "handled"; eventId: string; command: string; value: unknown }
-    | { status: "failed"; eventId: string; command: string; error: unknown };
+    | {
+        status: "failed";
+        eventId: string;
+        command: string;
+        error: unknown;
+        /** Handler runs so far for this event. */
+        attempts: number;
+        /** False after the final attempt; Poll then acknowledges the event. */
+        willRetry: boolean;
+        /** Earliest retry time in epoch milliseconds, when willRetry is true. */
+        retryAt?: number;
+    };
 
 export type CommandHandler = (context: CommandContext) => unknown | Promise<unknown>;
 

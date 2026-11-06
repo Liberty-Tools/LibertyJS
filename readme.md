@@ -92,7 +92,7 @@ const erlc = new LibertyJS({
 
 erlc.commands.command("help", async context => {
     const result = await context.reply("Need help? Ask a staff member.");
-    if ("error" in result || result.failures > 0) {
+    if ("error" in result) {
         throw new Error("The reply could not be sent");
     }
 });
@@ -127,15 +127,17 @@ Run `node index.js`, join your ERLC server, and enter `;help`. The SDK receives 
 | `context.reply(message)` | Resolve the triggering player and send a private message. |
 | `context.announce(message)` | Send an ERLC `:h` message. |
 
-Replies and announcements allow up to 200 characters and replace line breaks with spaces. They return a result; an API failure does not automatically throw. Check for `error` or a nonzero `failures` count. A player who has left may produce `player_not_found`.
+Replies and announcements allow up to 200 characters and replace line breaks with spaces. They return a result; an API failure does not automatically throw. Check for `error`: if LibertyJS cannot confirm that ERLC accepted the command, the result has `error: "command_failed"` along with the usual `failures`, `failureReasons`, and `results`. This covers both a clear rejection and an uncertain outcome such as a network error, where the command may already have run, so don't resend it automatically. A player who has left may produce `player_not_found`.
 
 ### Poll behavior and retries
 
 - `commands.start()` reads immediately, processes events in order, then waits two seconds between pages. Use `{ pollInterval: 5000 }` to change that delay in milliseconds; the minimum is 100.
 - The router follows cursor pages and acknowledges successful, unhandled, ignored, duplicate, and cooldown events with string IDs. An acknowledgement tells the gateway that this Poll client is finished with the event.
 - A thrown handler error leaves the event pending. Avoid repeating side effects on retry: an earlier action may have succeeded before a later action failed.
+- Retries slow down after each failure: 1, 2, 4, then 8 seconds (up to 60). By default a handler runs at most 5 times for one event. After the last failure the event is acknowledged so it stops coming back. Change the limit per command with `command("help", handler, { maxAttempts: 3 })`; use `1` to never retry. At most 1,000 failed events wait to retry at once; if that list is full, a new failure is final straight away instead of erasing another event's attempt count.
+- The `commandError` result includes `attempts`, `willRetry`, and `retryAt` (epoch milliseconds) so you can log or alert on a final failure.
 - Duplicate tracking is limited to the current process and a bounded cache. It is not a guarantee of exactly-once execution across restarts.
-- `commands.stop()` aborts Poll requests and waits up to 10 seconds for active work. It cannot forcibly cancel your handler.
+- `commands.stop()` aborts Poll requests and waits up to 10 seconds for active work. It cannot forcibly cancel your handler. Events that finished before or during shutdown are still acknowledged, so they do not run again after a restart.
 
 Failed handlers release their own cooldown reservation so Poll can retry them. If another command has since acquired that cooldown, the failed event stays pending until it can run. Concurrent deliveries of the same event wait for the active attempt. Retry and duplicate history share the bounded, in-memory event cache; neither survives a restart.
 
@@ -266,7 +268,7 @@ Batch results have the shape `{ status: "batch", results: [...] }`, with one res
 
 Exact batch replays keep the same generated event IDs, including distinct IDs for identical entries at different positions. Successful events are skipped on replay within the bounded process-local cache; failed events can retry. A differently packaged batch or process restart may produce repeat side effects, so receivers still need application-level idempotency where it matters.
 
-For a LibertyTools signed forward, verify the gateway signature in your receiver before calling `commands.handle(event)` with its normalized event. LibertyJS 1.3.0 does not include that verifier. Never pass unauthenticated public request bodies directly to `handle()`.
+For a LibertyTools signed forward, verify the gateway signature in your receiver before calling `commands.handle(event)` with its normalized event. LibertyJS does not include that verifier yet. Never pass unauthenticated public request bodies directly to `handle()`.
 
 ## Errors and rate limits
 

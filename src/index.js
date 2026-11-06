@@ -208,8 +208,9 @@ export default class LibertyJS {
             }
         }
 
-        const waitMilliseconds = Math.max(0, resetAt - Date.now());
-        if (waitMilliseconds > 0) await this.#wait(waitMilliseconds);
+        // Timers can fire a millisecond early (notably on Windows); keep waiting
+        // until the reset time has actually passed.
+        while (Date.now() < resetAt) await this.#wait(resetAt - Date.now());
     }
 
     #retryAfterMilliseconds(res, data) {
