@@ -54,9 +54,13 @@ sdk.commands.command(";help", async (context: CommandContext) => {
     const args: string[] = context.args;
     const userId: string = context.userId;
     const serverId: string = context.serverId;
-    await context.reply(`${command} ${argument} ${args.length} ${userId} ${serverId}`);
+    const reply = await context.reply(`${command} ${argument} ${args.length} ${userId} ${serverId}`);
+    if ("error" in reply && reply.error === "command_failed") {
+        const failures: number = reply.failures;
+        console.error(reply.message, failures);
+    }
     return context.announce("Hello server");
-}, { cooldown: 10_000 });
+}, { cooldown: 10_000, maxAttempts: 3 });
 const manualResult: CommandHandleResult = await sdk.commands.handle({
     event: "CustomCommand", command: "help", argument: "", userId: "1"
 });
@@ -64,7 +68,12 @@ const webhookResult: CommandWebhookResult = await sdk.commands.handleWebhook({ t
 if (webhookResult.status === "batch") {
     const results: CommandEventResult[] = webhookResult.results;
     for (const result of results) {
-        if (result.status === "failed") console.error(result.error);
+        if (result.status === "failed") {
+            const attempts: number = result.attempts;
+            const willRetry: boolean = result.willRetry;
+            const retryAt: number | undefined = result.retryAt;
+            console.error(result.error, attempts, willRetry, retryAt);
+        }
     }
 } else if (webhookResult.status === "rejected") {
     const reason: "invalid_signature" | "invalid_json" | "invalid_payload" = webhookResult.reason;
@@ -99,5 +108,7 @@ sdk.webhook.verify({ rawBody: { event: "CustomCommand" } });
 sdk.commands.command("help", "reply");
 // @ts-expect-error Cooldown must be numeric
 sdk.commands.command("help", () => undefined, { cooldown: "10s" });
+// @ts-expect-error maxAttempts must be numeric
+sdk.commands.command("help", () => undefined, { maxAttempts: "3" });
 // @ts-expect-error Poll page size must be numeric
 v2PollSdk.webhook.events({ limit: "50" });

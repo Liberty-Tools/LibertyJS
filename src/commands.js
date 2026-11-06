@@ -6,6 +6,13 @@ const DEFAULT_SHUTDOWN_TIMEOUT = 10_000;
 const DEFAULT_MAX_SEEN_EVENTS = 1_000;
 const MAX_MESSAGE_LENGTH = 200;
 const PLAYER_CACHE_TTL = 10_000;
+const DEFAULT_MAX_ATTEMPTS = 5;
+const RETRY_BASE_DELAY = 1_000;
+const RETRY_MAX_DELAY = 60_000;
+
+function retryDelay(attempts) {
+    return Math.min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * (2 ** (attempts - 1)));
+}
 
 function normalizeCommandName(value) {
     if (typeof value !== "string") return "";
@@ -197,7 +204,7 @@ export class CommandRouter extends EventEmitter {
         return this.#running;
     }
 
-    command(name, handler, { cooldown = 0 } = {}) {
+    command(name, handler, { cooldown = 0, maxAttempts = DEFAULT_MAX_ATTEMPTS } = {}) {
         const normalized = normalizeCommandName(name);
         if (!normalized) {
             throw new Error("[LibertyJS.commands]: Command name must be a non-empty name without whitespace");
@@ -208,7 +215,10 @@ export class CommandRouter extends EventEmitter {
         if (!Number.isFinite(cooldown) || cooldown < 0) {
             throw new Error("[LibertyJS.commands]: cooldown must be a non-negative number of milliseconds");
         }
-        this.#handlers.set(normalized, { handler, cooldown });
+        if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+            throw new Error("[LibertyJS.commands]: maxAttempts must be a positive integer");
+        }
+        this.#handlers.set(normalized, { handler, cooldown, maxAttempts });
         return this;
     }
 
@@ -240,6 +250,11 @@ export class CommandRouter extends EventEmitter {
         const previous = this.#seenEvents.get(event.id);
         if (previous && previous.status !== "failed") {
             return { status: "duplicate", eventId: event.id, command: event.command };
+        }
+        // A failed event is not rerun after its final attempt or before its
+        // backoff delay ends. Poll fetches it again without repeating side effects.
+        if (previous?.status === "failed" && (!previous.willRetry || previous.retryAt > Date.now())) {
+            return previous;
         }
 
         const registration = this.#handlers.get(event.command);
@@ -287,7 +302,17 @@ export class CommandRouter extends EventEmitter {
             // Release only this attempt's reservation; a newer attempt may have
             // acquired the cooldown while a slow handler was still running.
             if (this.#cooldowns.get(cooldownKey) === reservation) this.#cooldowns.delete(cooldownKey);
-            const result = { status: "failed", eventId: event.id, command: event.command, error };
+            const attempts = (previous?.status === "failed" ? previous.attempts ?? 1 : 0) + 1;
+            const willRetry = attempts < registration.maxAttempts;
+            const result = {
+                status: "failed",
+                eventId: event.id,
+                command: event.command,
+                error,
+                attempts,
+                willRetry,
+                retryAt: willRetry ? Date.now() + retryDelay(attempts) : undefined
+            };
             this.#rememberEvent(event.id, result);
             this.emit("commandError", result);
             return result;
@@ -453,7 +478,16 @@ export class CommandRouter extends EventEmitter {
         if (typeof this.#sendCommands !== "function") {
             return { error: "command_unavailable", message: "[LibertyJS.commands]: Command transport is not configured" };
         }
-        return await this.#sendCommands([command]);
+        const result = await this.#sendCommands([command]);
+        // Surface a rejected command as an error so `if (result.error)` checks work.
+        if (result && !result.error && result.failures > 0) {
+            return {
+                ...result,
+                error: "command_failed",
+                message: "[LibertyJS.commands]: ER:LC did not accept the command"
+            };
+        }
+        return result;
     }
 
     async #pollLoop(pollInterval, signal) {
@@ -481,7 +515,9 @@ export class CommandRouter extends EventEmitter {
                             for (const event of events) {
                                 if (signal.aborted) break;
                                 const result = await this.handle(event);
-                                if (result.status !== "failed" && event && typeof event === "object" && typeof event.id === "string") {
+                                // Retryable failures stay pending; a final failure is acknowledged.
+                                const finished = result.status !== "failed" || result.willRetry === false;
+                                if (finished && event && typeof event === "object" && typeof event.id === "string") {
                                     acknowledged.push(event.id);
                                 }
                             }

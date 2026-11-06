@@ -92,7 +92,7 @@ const erlc = new LibertyJS({
 
 erlc.commands.command("help", async context => {
     const result = await context.reply("Need help? Ask a staff member.");
-    if ("error" in result || result.failures > 0) {
+    if ("error" in result) {
         throw new Error("The reply could not be sent");
     }
 });
@@ -127,13 +127,15 @@ Run `node index.js`, join your ERLC server, and enter `;help`. The SDK receives 
 | `context.reply(message)` | Resolve the triggering player and send a private message. |
 | `context.announce(message)` | Send an ERLC `:h` message. |
 
-Replies and announcements allow up to 200 characters and replace line breaks with spaces. They return a result; an API failure does not automatically throw. Check for `error` or a nonzero `failures` count. A player who has left may produce `player_not_found`.
+Replies and announcements allow up to 200 characters and replace line breaks with spaces. They return a result; an API failure does not automatically throw. Check for `error`: if ERLC rejects the command, the result has `error: "command_failed"` along with the usual `failures` and `failureReasons`. A player who has left may produce `player_not_found`.
 
 ### Poll behavior and retries
 
 - `commands.start()` reads immediately, processes events in order, then waits two seconds between pages. Use `{ pollInterval: 5000 }` to change that delay in milliseconds; the minimum is 100.
 - The router follows cursor pages and acknowledges successful, unhandled, ignored, duplicate, and cooldown events with string IDs. An acknowledgement tells the gateway that this Poll client is finished with the event.
 - A thrown handler error leaves the event pending. Avoid repeating side effects on retry: an earlier action may have succeeded before a later action failed.
+- Retries slow down after each failure: 1, 2, 4, then 8 seconds (up to 60). By default a handler runs at most 5 times for one event. After the last failure the event is acknowledged so it stops coming back. Change the limit per command with `command("help", handler, { maxAttempts: 3 })`; use `1` to never retry.
+- The `commandError` result includes `attempts`, `willRetry`, and `retryAt` (epoch milliseconds) so you can log or alert on a final failure.
 - Duplicate tracking is limited to the current process and a bounded cache. It is not a guarantee of exactly-once execution across restarts.
 - `commands.stop()` aborts Poll requests and waits up to 10 seconds for active work. It cannot forcibly cancel your handler.
 

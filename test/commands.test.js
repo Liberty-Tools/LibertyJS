@@ -195,7 +195,9 @@ test("failed handlers remain pending and are retried before acknowledgement", as
     assert.deepEqual(acknowledgements, [["event-1"]]);
 });
 
-test("permanent handler failures with cooldowns stay pending between Poll reads", async () => {
+test("permanent handler failures with cooldowns stay pending between Poll reads", async t => {
+    let now = 1_000;
+    t.mock.method(Date, "now", () => now);
     let polls = 0;
     let attempts = 0;
     const acknowledgements = [];
@@ -203,6 +205,8 @@ test("permanent handler failures with cooldowns stay pending between Poll reads"
     const router = new CommandRouter({
         pollEvents: async () => {
             if (++polls === 4) controller.abort();
+            // Move past each retry backoff so every read can retry the handler.
+            now += 5_000;
             return { events: [customCommand({ id: "permanent" })] };
         },
         acknowledgeEvents: async ids => { acknowledgements.push(ids); }
@@ -283,7 +287,7 @@ test("an older failure cannot clear a newer cooldown or be acknowledged by it", 
     assert.equal((await older).status, "failed");
     assert.equal((await router.handle(customCommand({ id: "older" }))).status, "failed");
     assert.equal((await router.handle(customCommand({ id: "third" }))).status, "cooldown");
-    now = 1_400;
+    now = 2_400; // past both the cooldown and the first retry backoff
     assert.equal((await router.handle(customCommand({ id: "older" }))).status, "handled");
     assert.equal(firstAttempts, 2);
 });
@@ -405,6 +409,89 @@ test("reply targets the triggering user ID even if the event username is stale",
     const result = await router.handle(customCommand({ username: "OtherPlayer" }));
     assert.equal(result.status, "handled");
     assert.equal(sent, ":pm CurrentPlayer Hello");
+});
+
+test("reply and announce report an ERLC rejection as an error", async () => {
+    const rejected = { successes: 0, failures: 1, failureReasons: [{ command: ":h Hi", status: 422 }], results: [] };
+    const router = new CommandRouter({
+        getServer: async () => ({ Players: [{ Player: "CurrentPlayer:123" }] }),
+        sendCommands: async () => rejected
+    });
+    router.command("help", async context => [await context.reply("Hi"), await context.announce("Hi")]);
+    const { value } = await router.handle(customCommand());
+    for (const result of value) {
+        assert.equal(result.error, "command_failed");
+        assert.equal(result.failures, 1);
+        assert.deepEqual(result.failureReasons, rejected.failureReasons);
+    }
+});
+
+test("a successful reply has no error field", async () => {
+    const router = new CommandRouter({
+        getServer: async () => ({ Players: [{ Player: "CurrentPlayer:123" }] }),
+        sendCommands: async () => ({ successes: 1, failures: 0, failureReasons: [], results: [] })
+    });
+    router.command("help", context => context.reply("Hi"));
+    const { value } = await router.handle(customCommand());
+    assert.equal("error" in value, false);
+});
+
+test("failed handlers back off before retrying", async t => {
+    let now = 1_000;
+    t.mock.method(Date, "now", () => now);
+    let attempts = 0;
+    const router = new CommandRouter();
+    router.command("help", () => { attempts++; throw new Error("down"); });
+    const first = await router.handle(customCommand());
+    assert.equal(first.attempts, 1);
+    assert.equal(first.willRetry, true);
+    assert.equal(first.retryAt, 2_000);
+    now = 1_999;
+    assert.equal((await router.handle(customCommand())).attempts, 1);
+    assert.equal(attempts, 1);
+    now = 2_000;
+    const second = await router.handle(customCommand());
+    assert.equal(second.attempts, 2);
+    assert.equal(second.retryAt, 4_000);
+    assert.equal(attempts, 2);
+});
+
+test("a handler stops retrying after maxAttempts and Poll acknowledges it", async t => {
+    let now = 1_000;
+    t.mock.method(Date, "now", () => now);
+    let attempts = 0;
+    let polls = 0;
+    const acknowledgements = [];
+    const failures = [];
+    const controller = new AbortController();
+    const router = new CommandRouter({
+        pollEvents: async () => {
+            if (++polls === 6) controller.abort();
+            now += 120_000; // past the longest backoff
+            return { events: [customCommand({ id: "broken" })] };
+        },
+        acknowledgeEvents: async ids => { acknowledgements.push(ids); return { acknowledged: ids }; }
+    });
+    router.on("commandError", result => failures.push(result));
+    router.command("help", () => { attempts++; throw new Error("always fails"); }, { maxAttempts: 3 });
+    try {
+        await router.start({ pollInterval: 100, signal: controller.signal });
+        while (router.running) await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(attempts, 3);
+        assert.deepEqual(failures.map(result => result.willRetry), [true, true, false]);
+        assert.equal(failures[2].retryAt, undefined);
+        // Reads 3-5 return the final failure without rerunning it, and acknowledge it.
+        assert.deepEqual(acknowledgements, [["broken"], ["broken"], ["broken"]]);
+    } finally {
+        await router.stop();
+    }
+});
+
+test("maxAttempts must be a positive integer", () => {
+    const router = new CommandRouter();
+    for (const maxAttempts of [0, -1, 1.5, Infinity, "3"]) {
+        assert.throws(() => router.command("help", () => undefined, { maxAttempts }), /maxAttempts/);
+    }
 });
 
 test("announce sends a sanitized server hint command", async () => {
@@ -556,8 +643,11 @@ test("malformed signed batches are rejected before any partial processing", asyn
     assert.equal(calls, 0);
 });
 
-test("mixed batch results retain successful work while retrying only failures", async () => {
+test("mixed batch results retain successful work while retrying only failures", async t => {
     const { sdk, delivery } = signedWebhookFixture();
+    const realNow = Date.now();
+    let now = realNow;
+    t.mock.method(Date, "now", () => now);
     let calls = 0;
     sdk.commands.command("help", context => {
         calls++;
@@ -569,6 +659,7 @@ test("mixed batch results retain successful work while retrying only failures", 
         { event: "CustomCommand", origin: "3", data: { command: "missing" } }
     ], server: "batch" });
     assert.deepEqual((await sdk.commands.handleWebhook(input)).results.map(result => result.status), ["handled", "failed", "unhandled"]);
+    now = realNow + 2_000; // past the retry backoff, still inside the signature window
     assert.deepEqual((await sdk.commands.handleWebhook(input)).results.map(result => result.status), ["duplicate", "handled", "duplicate"]);
     assert.equal(calls, 3);
 });

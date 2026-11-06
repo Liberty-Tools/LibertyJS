@@ -19,6 +19,7 @@ Version 1.3.1 includes the following fixes:
 
 - **Raw webhook batches:** verify the body once, validate the batch before processing, preserve player/server identities, and return per-event outcomes. Single events retain their runtime result shape.
 - **Retries with cooldowns:** release a failed attempt's reservation without clearing newer cooldowns; keep known failed work pending during a newer cooldown. Concurrent duplicate deliveries share the active outcome.
+- **Bounded retries:** failed handlers back off between attempts and stop after `maxAttempts`, then the event is acknowledged. Rejected replies and announcements return `error: "command_failed"`.
 - **Independent authentication:** ERLC authentication failures and resets no longer affect LibertyTools Poll reads, acknowledgements, or health requests.
 
 Regression tests cover these fixes. Retry and duplicate history remain bounded and process-local. Retrying a handler can repeat side effects if an earlier action succeeded before the handler failed.
