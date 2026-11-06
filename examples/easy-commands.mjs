@@ -40,7 +40,13 @@ erlc.commands.on("commandError", ({ command, error }) => {
 
 async function shutdown() {
     console.log("Stopping LibertyJS command polling...");
-    await erlc.commands.stop();
+    try {
+        await erlc.commands.stop();
+    } catch (error) {
+        // stop() rejects if a handler is still running after 10 seconds.
+        console.error(error.message);
+        process.exitCode = 1;
+    }
 }
 
 process.once("SIGINT", shutdown);

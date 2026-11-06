@@ -487,6 +487,56 @@ test("a handler stops retrying after maxAttempts and Poll acknowledges it", asyn
     }
 });
 
+test("work handled before stop() is still acknowledged", async () => {
+    const acknowledgements = [];
+    let release;
+    const handlerStarted = new Promise(resolve => { release = resolve; });
+    let finishHandler;
+    const router = new CommandRouter({
+        pollEvents: async () => ({ events: [customCommand({ id: "in-flight" })] }),
+        acknowledgeEvents: async (ids, options) => {
+            assert.equal(options?.signal, undefined);
+            acknowledgements.push(ids);
+            return { acknowledged: ids };
+        }
+    });
+    router.command("help", () => new Promise(resolve => { finishHandler = resolve; release(); }));
+    await router.start({ pollInterval: 100 });
+    await handlerStarted;
+    const stopping = router.stop();
+    finishHandler();
+    await stopping;
+    assert.deepEqual(acknowledgements, [["in-flight"]]);
+});
+
+test("pending retries survive eviction from the bounded event history", async t => {
+    let now = 1_000;
+    t.mock.method(Date, "now", () => now);
+    let attempts = 0;
+    const router = new CommandRouter({ maxSeenEvents: 3 });
+    router.command("fail", () => { attempts++; throw new Error("down"); }, { maxAttempts: 2 });
+    router.command("help", () => undefined);
+    const failing = customCommand({ id: "failing", command: "fail" });
+    assert.equal((await router.handle(failing)).attempts, 1);
+    for (let i = 0; i < 5; i++) await router.handle(customCommand({ id: `other-${i}` }));
+    now += 10_000;
+    const second = await router.handle(failing);
+    assert.equal(second.attempts, 2);
+    assert.equal(second.willRetry, false);
+    now += 10_000;
+    await router.handle(failing);
+    assert.equal(attempts, 2);
+});
+
+test("announce rejects an invalid message instead of throwing synchronously", async () => {
+    const router = new CommandRouter({ sendCommands: async () => ({ successes: 1, failures: 0, failureReasons: [], results: [] }) });
+    let returned;
+    router.command("help", context => { returned = context.announce(""); return returned.catch(() => "rejected"); });
+    const result = await router.handle(customCommand());
+    assert.equal(returned instanceof Promise, true);
+    assert.equal(result.value, "rejected");
+});
+
 test("maxAttempts must be a positive integer", () => {
     const router = new CommandRouter();
     for (const maxAttempts of [0, -1, 1.5, Infinity, "3"]) {

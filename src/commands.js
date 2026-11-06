@@ -424,9 +424,14 @@ export class CommandRouter extends EventEmitter {
     #rememberEvent(id, result) {
         this.#seenEvents.delete(id);
         this.#seenEvents.set(id, result);
-        if (this.#seenEvents.size > this.#maxSeenEvents) {
-            this.#seenEvents.delete(this.#seenEvents.keys().next().value);
+        if (this.#seenEvents.size <= this.#maxSeenEvents) return;
+        // Evict the oldest finished entry. A failure still waiting to retry keeps
+        // its attempt count, so busy servers cannot reset the maxAttempts limit.
+        let victim;
+        for (const [key, entry] of this.#seenEvents) {
+            if (!(entry.status === "failed" && entry.willRetry)) { victim = key; break; }
         }
+        this.#seenEvents.delete(victim ?? this.#seenEvents.keys().next().value);
     }
 
     #createContext(event) {
@@ -438,7 +443,8 @@ export class CommandRouter extends EventEmitter {
             userId: event.userId,
             serverId: event.serverId,
             reply: message => this.#reply(event, message),
-            announce: message => this.#runCommand(`:h ${sanitizeMessage(message)}`)
+            // Async so an invalid message rejects like reply() instead of throwing synchronously.
+            announce: async message => await this.#runCommand(`:h ${sanitizeMessage(message)}`)
         };
     }
 
@@ -467,7 +473,12 @@ export class CommandRouter extends EventEmitter {
             const identity = playerIdentity(entry);
             const username = safeUsername(identity?.username);
             if (identity?.userId === userId && username) {
-                this.#playerCache.set(userId, { username, expiresAt: Date.now() + PLAYER_CACHE_TTL });
+                // Drop expired entries so a long-running bot does not keep every past player.
+                const now = Date.now();
+                for (const [id, entry] of this.#playerCache) {
+                    if (entry.expiresAt <= now) this.#playerCache.delete(id);
+                }
+                this.#playerCache.set(userId, { username, expiresAt: now + PLAYER_CACHE_TTL });
                 return username;
             }
         }
@@ -522,8 +533,10 @@ export class CommandRouter extends EventEmitter {
                                 }
                             }
                             if (acknowledged.length && typeof this.#acknowledgeEvents === "function") {
-                                const result = await this.#acknowledgeEvents(acknowledged, { signal });
-                                if (result?.error && !signal.aborted) this.emit("pollError", {
+                                // Not tied to the stop signal: work that already ran must still be
+                                // acknowledged during shutdown, or a restart would run it again.
+                                const result = await this.#acknowledgeEvents(acknowledged);
+                                if (result?.error) this.emit("pollError", {
                                     error: new Error(`[LibertyJS.commands]: Poll acknowledgement failed (${result.error})`)
                                 });
                             }

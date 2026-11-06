@@ -54,7 +54,13 @@ if (!ERLC_SERVER_KEY || !POLL_SUBSCRIPTION_ID || !POLL_TOKEN) {
         if (stopping) return;
         stopping = true;
         console.log("Stopping the quick test...");
-        await erlc.commands.stop();
+        try {
+            await erlc.commands.stop();
+        } catch (error) {
+            // stop() rejects if a handler is still running after 10 seconds.
+            console.error(error.message);
+            process.exitCode = 1;
+        }
     }
 
     process.once("SIGINT", stop);
