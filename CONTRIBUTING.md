@@ -35,7 +35,7 @@ npm run check
 npm pack --dry-run
 ```
 
-`check` runs runtime tests and strict TypeScript checks using NodeNext and Bundler resolution. Tests use mocked requests and need no live ERLC credentials. `pack --dry-run` lists the files that would ship to npm without publishing them.
+`check` runs runtime tests and strict TypeScript checks using NodeNext and Bundler resolution. Unit tests use mocked requests; integration tests send real HTTP requests to disposable servers on `127.0.0.1` with automatically assigned ports. Allow local loopback connections when running the suite. Tests need no live ERLC credentials and send no requests to production. `pack --dry-run` lists the files that would ship to npm without publishing them.
 
 Add regression tests for behavior changes. Update declarations, examples, and the README together when changing the public API. Never commit real server keys, Poll tokens, webhook credentials, or private player data.
 

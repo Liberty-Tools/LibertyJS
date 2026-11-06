@@ -246,7 +246,9 @@ export default class LibertyJS {
     }
 
     async #performFetchAPI(url, options = {}) {
-        if (this.#resStatus.forbiddenErrors >= 3) {
+        const targetURL = url instanceof URL ? url : new URL(url);
+        const isERLC = targetURL.origin === new URL(DEFAULT_API_URL).origin;
+        if (isERLC && this.#resStatus.forbiddenErrors >= 3) {
             return {
                 error: "forbidden",
                 message: "[LibertyJS]: Repeated authentication failures; API calls for this server key are suspended",
@@ -254,9 +256,7 @@ export default class LibertyJS {
             };
         }
 
-        const targetURL = url instanceof URL ? url : new URL(url);
         const method = (options.method || "GET").toUpperCase();
-        const isERLC = targetURL.origin === new URL(DEFAULT_API_URL).origin;
         const routeKey = `${method} ${targetURL.pathname}`;
         const headers = new Headers(options.headers || {});
         let body = options.body;
@@ -289,14 +289,31 @@ export default class LibertyJS {
                 };
             }
 
+            if (isERLC) this.#readRateLimit(res, routeKey);
+
             let data = null;
             try {
-                data = await res.json();
+                const responseBody = await res.text();
+                if (responseBody.trim()) {
+                    try {
+                        data = JSON.parse(responseBody);
+                    } catch {
+                        // Preserve HTTP errors and Retry-After even if a proxy
+                        // returns HTML. A nonempty successful response must be JSON.
+                        if (res.ok) return {
+                            error: "network-error",
+                            message: `[LibertyJS]: ${isERLC ? "ER:LC API" : "Webhook relay"} returned invalid JSON`
+                        };
+                    }
+                }
             } catch {
-                // Some valid responses may not include a JSON body.
+                // The request may already have taken effect. Report uncertainty
+                // without retrying it or claiming an unread response was success.
+                return {
+                    error: "network-error",
+                    message: `[LibertyJS]: Could not read the complete ${isERLC ? "ER:LC API" : "webhook relay"} response`
+                };
             }
-
-            if (isERLC) this.#readRateLimit(res, routeKey);
 
             if (res.status === 429 && attempt < this.#maxRateLimitRetries) {
                 await this.#wait(this.#retryAfterMilliseconds(res, data), options.signal);
@@ -304,7 +321,7 @@ export default class LibertyJS {
             }
 
             if (!res.ok) {
-                const authenticationFailure = res.status === 403 && [2000, 2001, 2002, 2003, 2004].includes(data?.code);
+                const authenticationFailure = isERLC && res.status === 403 && [2000, 2001, 2002, 2003, 2004].includes(data?.code);
                 if (authenticationFailure) this.#resStatus.forbiddenErrors++;
 
                 return {
@@ -319,7 +336,7 @@ export default class LibertyJS {
                 };
             }
 
-            this.#resStatus.forbiddenErrors = 0;
+            if (isERLC) this.#resStatus.forbiddenErrors = 0;
             return data;
         }
     }

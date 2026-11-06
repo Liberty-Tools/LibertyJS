@@ -137,7 +137,7 @@ Replies and announcements allow up to 200 characters and replace line breaks wit
 - Duplicate tracking is limited to the current process and a bounded cache. It is not a guarantee of exactly-once execution across restarts.
 - `commands.stop()` aborts Poll requests and waits up to 10 seconds for active work. It cannot forcibly cancel your handler.
 
-**Known 1.3.0 issue:** when a handler has a cooldown, a failed event may be acknowledged on its next delivery without retrying. Avoid cooldowns for handlers that depend on retrying failures until this is fixed. See the [roadmap](ROADMAP.md).
+Failed handlers release their own cooldown reservation so Poll can retry them. If another command has since acquired that cooldown, the failed event stays pending until it can run. Concurrent deliveries of the same event wait for the active attempt. Retry and duplicate history share the bounded, in-memory event cache; neither survives a restart.
 
 For repository examples, see [easy-commands.mjs](examples/easy-commands.mjs) and [quick-test.mjs](examples/quick-test.mjs). These examples log failed replies and do not retry them. The handler completes, so the Poll event is acknowledged even if the reply failed. After cloning the repository and installing dependencies, `npm run example:commands` starts the `;libertytest` example.
 
@@ -239,7 +239,32 @@ if (!valid) {
 
 This illustrates the SDK call, not a complete HTTP server. Your framework must supply the original request bytes and headers. Do not verify a parsed and re-serialized body. `webhook.verify()` is an alias; timestamps more than five minutes from the host clock are rejected.
 
-**Known 1.3.0 limitation:** `commands.handleWebhook()` does not unpack raw ERLC event batches. For now, verify the body, validate and split its `events` array, and normalize each event before calling `commands.handle(event)`. In particular, map raw `origin` to `data.userId` and the outer `server` to `serverId`. Prefer Poll for the ready-to-use command flow above.
+`commands.handleWebhook()` verifies the exact signed body and routes either an individual event or an ERLC `{ events: [...], server: ... }` batch. It maps raw `origin` to the player ID and carries the outer server ID into each event. Malformed batches are rejected before any handlers run. Probes and unknown event types are ignored.
+
+```js
+const outcome = await erlc.commands.handleWebhook({
+    timestamp: request.headers["x-signature-timestamp"],
+    signature: request.headers["x-signature-ed25519"],
+    rawBody: request.rawBody
+});
+if (outcome.status === "rejected") {
+    // Respond with a 4xx status; do not process the body yourself.
+    console.error(outcome.reason);
+} else {
+    const results = outcome.status === "batch" ? outcome.results : [outcome];
+    if (results.some(result => result.status === "failed")) {
+        // Some work failed. Apply your receiver's retry policy instead of
+        // treating every event as successfully handled.
+        console.error("A command handler failed");
+    } else {
+        // Return a 2xx response, including for ignored validation probes.
+    }
+}
+```
+
+Batch results have the shape `{ status: "batch", results: [...] }`, with one result per input event in order. Single events keep their previous result shape. TypeScript callers can use `CommandWebhookResult` for `handleWebhook()` and `CommandEventResult` for one event. Existing `CommandHandleResult` annotations remain supported and now include the batch case; exhaustive result handling should account for that case. Rejected requests report `invalid_signature`, `invalid_json`, or `invalid_payload`. An empty batch returns an empty results array.
+
+Exact batch replays keep the same generated event IDs, including distinct IDs for identical entries at different positions. Successful events are skipped on replay within the bounded process-local cache; failed events can retry. A differently packaged batch or process restart may produce repeat side effects, so receivers still need application-level idempotency where it matters.
 
 For a LibertyTools signed forward, verify the gateway signature in your receiver before calling `commands.handle(event)` with its normalized event. LibertyJS 1.3.0 does not include that verifier. Never pass unauthenticated public request bodies directly to `handle()`.
 
@@ -247,9 +272,11 @@ For a LibertyTools signed forward, verify the gateway signature in your receiver
 
 HTTP and network failures normally return an object with `error` and `message`. HTTP errors also include `status`, `statusText`, `headers`, `apiResponse`, and optional `code` and `retryAfter` fields. Configuration mistakes and invalid method options can throw.
 
+An incomplete response or a nonempty successful response containing invalid JSON returns a `network-error` instead of reporting success. A command may already have reached ERLC when its response is lost, so the SDK does not automatically resend it. Empty successful responses remain supported. Non-JSON HTTP errors still preserve their status and retry headers.
+
 HTTP 429 responses trigger a bounded retry using `Retry-After`, then `retry_after` from the body or `X-RateLimit-Reset`. Other failures are not automatically retried. Instances sharing an ERLC key coordinate API requests within the same process; this does not coordinate separate processes or machines.
 
-After three recognized ERLC authentication failures, the instance stops making requests. Correct the credentials and create a new instance. In 1.3.0 this also blocks its Poll calls. Server queries and remote commands have no configurable SDK timeout yet; see the [known issues](ROADMAP.md#fixes-to-prioritize).
+After three recognized ERLC authentication failures, the instance stops making ERLC requests. A successful ERLC response before that threshold resets the counter; relay responses do not affect it. Correct the credentials and create a new instance after the cutoff. Poll reads, acknowledgements, and relay health remain independent. Server queries and remote commands have no configurable SDK timeout yet; see the [known issues](ROADMAP.md#fixes-to-prioritize).
 
 ## TypeScript
 

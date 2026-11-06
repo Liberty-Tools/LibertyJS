@@ -13,17 +13,20 @@ This file tracks proposed SDK improvements, not available features or promised r
 
 Raw API and Poll responses are unvalidated JSON. Callers must check their shape before reading fields.
 
+## Fixed in 1.3.1
+
+Version 1.3.1 includes the following fixes:
+
+- **Raw webhook batches:** verify the body once, validate the batch before processing, preserve player/server identities, and return per-event outcomes. Single events retain their runtime result shape.
+- **Retries with cooldowns:** release a failed attempt's reservation without clearing newer cooldowns; keep known failed work pending during a newer cooldown. Concurrent duplicate deliveries share the active outcome.
+- **Independent authentication:** ERLC authentication failures and resets no longer affect LibertyTools Poll reads, acknowledgements, or health requests.
+
+Regression tests cover these fixes. Retry and duplicate history remain bounded and process-local. Retrying a handler can repeat side effects if an earlier action succeeded before the handler failed.
+
 ## Fixes to prioritize
 
-These issues were reproduced during code review and still need fixes:
-
-1. **Raw webhook batches:** `commands.handleWebhook()` verifies signatures but does not unpack ERLC request bodies containing an `events` array. Raw events also need `origin` mapped to the triggering user ID. Add tests using the actual request shape.
-2. **Retries with cooldowns:** a failed handler can leave its cooldown active. Its next Poll delivery can be acknowledged as a cooldown without running successfully. Preserve failed work until it can be retried.
-3. **Independent authentication:** repeated ERLC authentication failures currently block the same instance's LibertyTools Poll requests. Separate these because they use different credentials.
-4. **Request timeouts:** add configurable timeouts and cancellation to server queries and remote commands so stalled requests cannot hold up the shared queue.
-5. **Cache cleanup:** bound or remove unused player-cache entries and shared request states in long-running applications.
-
-Each fix needs a regression test. Retrying a handler can repeat side effects if an earlier action succeeded before the handler failed.
+- **Request timeouts:** add configurable timeouts and cancellation to server queries and remote commands so stalled requests cannot hold up the shared queue.
+- **Cache cleanup:** bound or remove unused player-cache entries and shared request states in long-running applications.
 
 ## Possible later improvements
 

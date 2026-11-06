@@ -187,12 +187,105 @@ test("failed handlers remain pending and are retried before acknowledgement", as
     router.command("help", () => {
         attempts++;
         if (attempts === 1) throw new Error("temporary failure");
-    });
+    }, { cooldown: 10_000 });
     await router.start({ pollInterval: 100 });
     await finished;
     await router.stop();
     assert.equal(attempts, 2);
     assert.deepEqual(acknowledgements, [["event-1"]]);
+});
+
+test("permanent handler failures with cooldowns stay pending between Poll reads", async () => {
+    let polls = 0;
+    let attempts = 0;
+    const acknowledgements = [];
+    const controller = new AbortController();
+    const router = new CommandRouter({
+        pollEvents: async () => {
+            if (++polls === 4) controller.abort();
+            return { events: [customCommand({ id: "permanent" })] };
+        },
+        acknowledgeEvents: async ids => { acknowledgements.push(ids); }
+    });
+    router.command("help", () => { attempts++; throw new Error("still unavailable"); }, { cooldown: 10_000 });
+    try {
+        await router.start({ pollInterval: 100, signal: controller.signal });
+        while (router.running) await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(attempts, 3);
+        assert.deepEqual(acknowledgements, []);
+    } finally {
+        await router.stop();
+    }
+});
+
+test("acknowledgement failure does not rerun a successful handler", async () => {
+    let attempts = 0;
+    let acks = 0;
+    const controller = new AbortController();
+    const router = new CommandRouter({
+        pollEvents: async () => ({ events: [customCommand({ id: "ack-retry" })] }),
+        acknowledgeEvents: async () => {
+            if (++acks === 1) return { error: "network-error" };
+            controller.abort();
+            return { acknowledged: ["ack-retry"] };
+        }
+    });
+    router.command("help", () => { attempts++; }, { cooldown: 10_000 });
+    try {
+        await router.start({ pollInterval: 100, signal: controller.signal });
+        while (router.running) await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(attempts, 1);
+        assert.equal(acks, 2);
+    } finally {
+        await router.stop();
+    }
+});
+
+test("concurrent duplicate deliveries wait for the original failure", async () => {
+    let rejectHandler;
+    let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    let attempts = 0;
+    const router = new CommandRouter();
+    router.command("help", () => {
+        attempts++;
+        started();
+        return new Promise((resolve, reject) => { rejectHandler = reject; });
+    }, { cooldown: 10_000 });
+    const original = router.handle(customCommand());
+    await ready;
+    const duplicate = router.handle(customCommand());
+    rejectHandler(new Error("temporary failure"));
+    assert.equal((await original).status, "failed");
+    assert.equal((await duplicate).status, "failed");
+    assert.equal(attempts, 1);
+});
+
+test("an older failure cannot clear a newer cooldown or be acknowledged by it", async t => {
+    let now = 1_000;
+    t.mock.method(Date, "now", () => now);
+    let rejectFirst;
+    let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    let firstAttempts = 0;
+    const router = new CommandRouter();
+    router.command("help", context => {
+        if (context.event.id === "older" && ++firstAttempts === 1) {
+            started();
+            return new Promise((resolve, reject) => { rejectFirst = reject; });
+        }
+    }, { cooldown: 100 });
+    const older = router.handle(customCommand({ id: "older" }));
+    await ready;
+    now = 1_200;
+    assert.equal((await router.handle(customCommand({ id: "newer" }))).status, "handled");
+    rejectFirst(new Error("late failure"));
+    assert.equal((await older).status, "failed");
+    assert.equal((await router.handle(customCommand({ id: "older" }))).status, "failed");
+    assert.equal((await router.handle(customCommand({ id: "third" }))).status, "cooldown");
+    now = 1_400;
+    assert.equal((await router.handle(customCommand({ id: "older" }))).status, "handled");
+    assert.equal(firstAttempts, 2);
 });
 
 test("v2 Poll listEvents passes cursor and limit to the gateway", async () => {
@@ -362,6 +455,122 @@ test("handler failures are reported without throwing from the router", async () 
     assert.equal(result.status, "failed");
     assert.equal(result.error.message, "handler failed");
     assert.equal((await emitted).status, "failed");
+});
+
+function signedWebhookFixture() {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const sdk = new LibertyJS({
+        SERVER_KEY: "signed-batch-server",
+        WEBHOOK_PUBLIC_KEY: publicKey.export({ format: "der", type: "spki" }).toString("base64")
+    });
+    function delivery(payload, timestamp = String(Math.floor(Date.now() / 1_000))) {
+        const rawBody = Buffer.from(typeof payload === "string" ? payload : JSON.stringify(payload));
+        return { timestamp, rawBody, signature: sign(null, Buffer.concat([Buffer.from(timestamp), rawBody]), privateKey).toString("hex") };
+    }
+    return { sdk, delivery };
+}
+
+test("signed ERLC batches preserve identity, order, arguments, and replay IDs", async () => {
+    const { sdk, delivery } = signedWebhookFixture();
+    const received = [];
+    sdk.commands.command("help", context => { received.push(context); });
+    const input = delivery({
+        server: "server-batch",
+        events: [
+            { event: "WebhookProbe", origin: "global", data: {} },
+            { event: "CustomCommand", origin: "123", data: { command: "help", argument: 'Player "final warning"' } },
+            { event: "FutureEvent", data: {} },
+            { event: "CustomCommand", origin: "123", data: { command: "help", argument: 'Player "final warning"' } }
+        ]
+    });
+    const first = await sdk.commands.handleWebhook(input);
+    assert.equal(first.status, "batch");
+    assert.deepEqual(first.results.map(result => result.status), ["ignored", "handled", "ignored", "handled"]);
+    assert.equal(received.length, 2);
+    assert.equal(received[0].userId, "123");
+    assert.equal(received[0].serverId, "server-batch");
+    assert.deepEqual(received[0].args, ["Player", "final warning"]);
+    assert.notEqual(received[0].event.id, received[1].event.id);
+    const replay = await sdk.commands.handleWebhook(input);
+    assert.deepEqual(replay.results.map(result => result.status), ["ignored", "duplicate", "ignored", "duplicate"]);
+    assert.equal(received.length, 2);
+});
+
+test("signed individual raw events map origin and preserve existing single results", async () => {
+    const { sdk, delivery } = signedWebhookFixture();
+    let context;
+    sdk.commands.command("help", value => { context = value; });
+    const result = await sdk.commands.handleWebhook(delivery({
+        event: "CustomCommand", origin: 123, server: "single-server", data: { command: "help", argument: "" }
+    }));
+    assert.equal(result.status, "handled");
+    assert.equal(context.userId, "123");
+    assert.equal(context.serverId, "single-server");
+});
+
+test("a batch verifies its original bytes once and supports ArrayBuffer bodies", async () => {
+    const { sdk, delivery } = signedWebhookFixture();
+    let verifications = 0;
+    let handled = 0;
+    const router = new CommandRouter({ verifyWebhook: input => {
+        verifications++;
+        return sdk.verifyWebhook(input);
+    } });
+    router.command("help", () => { handled++; });
+    const input = delivery(' { "server": "batch", "events": [\n' +
+        '{"event":"CustomCommand","origin":"1","data":{"command":"help"}},' +
+        '{"event":"CustomCommand","origin":"2","data":{"command":"help"}}] } ');
+    input.rawBody = Uint8Array.from(input.rawBody).buffer;
+    assert.equal((await router.handleWebhook(input)).status, "batch");
+    assert.equal(verifications, 1);
+    assert.equal(handled, 2);
+});
+
+test("invalid or stale signatures reject an entire batch before any handler", async () => {
+    const { sdk, delivery } = signedWebhookFixture();
+    let calls = 0;
+    sdk.commands.command("help", () => { calls++; });
+    const payload = { server: "batch", events: [{ event: "CustomCommand", origin: "123", data: { command: "help" } }] };
+    const input = delivery(payload);
+    for (const invalid of [
+        { ...input, signature: "00" },
+        { ...input, rawBody: Buffer.from(JSON.stringify({ ...payload, server: "tampered" })) },
+        delivery(payload, String(Math.floor(Date.now() / 1_000) - 600))
+    ]) assert.deepEqual(await sdk.commands.handleWebhook(invalid), { status: "rejected", reason: "invalid_signature" });
+    assert.equal(calls, 0);
+});
+
+test("malformed signed batches are rejected before any partial processing", async () => {
+    const { sdk, delivery } = signedWebhookFixture();
+    let calls = 0;
+    sdk.commands.command("help", () => { calls++; });
+    const valid = { event: "CustomCommand", origin: "123", data: { command: "help" } };
+    for (const payload of [
+        { events: null }, { events: {} }, { events: [valid], server: {} }, { events: [valid, null] },
+        { events: [valid, []] }, { events: [valid, {}] },
+        { events: [valid, { ...valid, data: { command: {} } }] },
+        { events: [valid, { ...valid, origin: {} }] }
+    ]) assert.deepEqual(await sdk.commands.handleWebhook(delivery(payload)), { status: "rejected", reason: "invalid_payload" });
+    assert.deepEqual(await sdk.commands.handleWebhook(delivery("{")), { status: "rejected", reason: "invalid_json" });
+    assert.deepEqual(await sdk.commands.handleWebhook(delivery({ events: [] })), { status: "batch", results: [] });
+    assert.equal(calls, 0);
+});
+
+test("mixed batch results retain successful work while retrying only failures", async () => {
+    const { sdk, delivery } = signedWebhookFixture();
+    let calls = 0;
+    sdk.commands.command("help", context => {
+        calls++;
+        if (context.userId === "2" && calls === 2) throw new Error("temporary failure");
+    });
+    const input = delivery({ events: [
+        { event: "CustomCommand", origin: "1", data: { command: "help" } },
+        { event: "CustomCommand", origin: "2", data: { command: "help" } },
+        { event: "CustomCommand", origin: "3", data: { command: "missing" } }
+    ], server: "batch" });
+    assert.deepEqual((await sdk.commands.handleWebhook(input)).results.map(result => result.status), ["handled", "failed", "unhandled"]);
+    assert.deepEqual((await sdk.commands.handleWebhook(input)).results.map(result => result.status), ["duplicate", "handled", "duplicate"]);
+    assert.equal(calls, 3);
 });
 
 test("webhook relay errors do not expose the webhook ID", async () => {

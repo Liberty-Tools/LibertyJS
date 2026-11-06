@@ -2,7 +2,7 @@
 import LibertyJS, {
     DEFAULT_WEBHOOK_RELAY_URL, ERLC_WEBHOOK_PUBLIC_KEY,
     type LibertyError, type ServerOption, type CommandSummary,
-    type CommandContext, type CommandHandleResult, CommandRouter
+    type CommandContext, type CommandHandleResult, type CommandEventResult, type CommandWebhookResult, CommandRouter
 } from "@libertytools/libertyjs";
 
 const sdk = new LibertyJS({
@@ -60,7 +60,17 @@ sdk.commands.command(";help", async (context: CommandContext) => {
 const manualResult: CommandHandleResult = await sdk.commands.handle({
     event: "CustomCommand", command: "help", argument: "", userId: "1"
 });
-await sdk.commands.handleWebhook({ timestamp: "1", signature: "00", rawBody: "{}" });
+const webhookResult: CommandWebhookResult = await sdk.commands.handleWebhook({ timestamp: "1", signature: "00", rawBody: "{}" });
+if (webhookResult.status === "batch") {
+    const results: CommandEventResult[] = webhookResult.results;
+    for (const result of results) {
+        if (result.status === "failed") console.error(result.error);
+    }
+} else if (webhookResult.status === "rejected") {
+    const reason: "invalid_signature" | "invalid_json" | "invalid_payload" = webhookResult.reason;
+}
+// Existing explicit result annotations continue to accept webhook results.
+const compatibleWebhookResult: CommandHandleResult = await sdk.commands.handleWebhook({ rawBody: "{}" });
 await sdk.commands.start({ pollInterval: 2_000, signal: new AbortController().signal });
 const running: boolean = sdk.commands.running;
 await sdk.commands.stop({ timeout: 1_000 });

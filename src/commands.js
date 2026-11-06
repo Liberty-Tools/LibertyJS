@@ -56,7 +56,7 @@ function parseArguments(value) {
 }
 
 function normalizeEvent(input) {
-    if (!input || typeof input !== "object") return null;
+    if (!isRecord(input)) return null;
     const data = input.data && typeof input.data === "object" ? input.data : {};
     const type = String(input.event ?? input.type ?? data.event ?? data.type ?? "");
     if (type.toLowerCase() !== "customcommand") return null;
@@ -64,7 +64,7 @@ function normalizeEvent(input) {
     const command = normalizeCommandName(input.command ?? data.command);
     if (!command) return null;
     const argument = String(input.argument ?? data.argument ?? "");
-    const userId = String(input.userId ?? data.userId ?? data.userID ?? "");
+    const userId = String(input.userId ?? data.userId ?? data.userID ?? input.origin ?? "");
     const serverId = String(input.serverId ?? input.server ?? data.serverId ?? data.server ?? "");
     const id = String(input.id ?? input._id ?? createHash("sha256")
         .update(JSON.stringify(input))
@@ -83,6 +83,30 @@ function normalizeEvent(input) {
         receivedAt: input.createdAt ?? input.receivedAt ?? data.receivedAt,
         raw: input
     };
+}
+
+function isRecord(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isIdentity(value) {
+    return (typeof value === "string" && value.trim().length > 0) ||
+        (Number.isSafeInteger(value) && value >= 0);
+}
+
+function isWebhookEvent(value) {
+    if (!isRecord(value) || (value.data !== undefined && !isRecord(value.data))) return false;
+    const data = value.data ?? {};
+    const type = value.event ?? value.type ?? data.event ?? data.type;
+    if (typeof type !== "string" || !type.trim()) return false;
+    for (const id of [value.id, value._id, value.origin, value.userId, data.userId, data.userID,
+        value.serverId, value.server, data.serverId, data.server]) {
+        if (id !== undefined && !isIdentity(id)) return false;
+    }
+    if (type.toLowerCase() !== "customcommand") return true;
+    const argument = value.argument ?? data.argument;
+    return Boolean(normalizeCommandName(value.command ?? data.command)) &&
+        (argument === undefined || typeof argument === "string");
 }
 
 function extractUsername(input, data) {
@@ -141,8 +165,8 @@ function abortableWait(milliseconds, signal) {
 export class CommandRouter extends EventEmitter {
     #handlers = new Map();
     #cooldowns = new Map();
-    #seenEvents = new Set();
-    #seenOrder = [];
+    #seenEvents = new Map();
+    #inFlight = new Map();
     #pollEvents;
     #acknowledgeEvents;
     #sendCommands;
@@ -196,14 +220,32 @@ export class CommandRouter extends EventEmitter {
     async handle(input) {
         const event = normalizeEvent(input);
         if (!event) return { status: "ignored", reason: "unsupported_event" };
-        if (this.#seenEvents.has(event.id)) {
+        const active = this.#inFlight.get(event.id);
+        if (active) {
+            const result = await active;
+            return result.status === "failed" ? result
+                : { status: "duplicate", eventId: event.id, command: event.command };
+        }
+        // Register before invoking user code, including synchronous handlers.
+        const attempt = Promise.resolve().then(() => this.#handleEvent(event));
+        this.#inFlight.set(event.id, attempt);
+        try {
+            return await attempt;
+        } finally {
+            this.#inFlight.delete(event.id);
+        }
+    }
+
+    async #handleEvent(event) {
+        const previous = this.#seenEvents.get(event.id);
+        if (previous && previous.status !== "failed") {
             return { status: "duplicate", eventId: event.id, command: event.command };
         }
 
-        this.#rememberEvent(event.id);
         const registration = this.#handlers.get(event.command);
         if (!registration) {
             const result = { status: "unhandled", eventId: event.id, command: event.command };
+            this.#rememberEvent(event.id, result);
             this.emit("unhandled", result);
             return result;
         }
@@ -211,56 +253,91 @@ export class CommandRouter extends EventEmitter {
         const cooldownKey = `${event.command}:${event.userId || "unknown"}`;
         const now = Date.now();
         if (++this.#cooldownChecks % 100 === 0) {
-            for (const [key, expiresAt] of this.#cooldowns) {
-                if (expiresAt <= now) this.#cooldowns.delete(key);
+            for (const [key, reservation] of this.#cooldowns) {
+                if (reservation.expiresAt <= now) this.#cooldowns.delete(key);
             }
         }
-        const availableAt = this.#cooldowns.get(cooldownKey) ?? 0;
+        const availableAt = this.#cooldowns.get(cooldownKey)?.expiresAt ?? 0;
         if (availableAt <= now) this.#cooldowns.delete(cooldownKey);
         if (availableAt > now) {
+            // A later successful command may own this cooldown. Keep an earlier
+            // failed event pending until it can retry rather than acknowledging it.
+            if (previous?.status === "failed") return previous;
             const result = {
                 status: "cooldown",
                 eventId: event.id,
                 command: event.command,
                 remaining: availableAt - now
             };
+            this.#rememberEvent(event.id, result);
             this.emit("cooldown", result);
             return result;
         }
-        if (registration.cooldown > 0) {
-            this.#cooldowns.set(cooldownKey, now + registration.cooldown);
-        }
+        const reservation = { expiresAt: now + registration.cooldown };
+        if (registration.cooldown > 0) this.#cooldowns.set(cooldownKey, reservation);
 
         const context = this.#createContext(event);
         try {
             const value = await registration.handler(context);
             const result = { status: "handled", eventId: event.id, command: event.command, value };
+            this.#rememberEvent(event.id, { status: "handled" });
             this.emit("handled", result);
             return result;
         } catch (error) {
-            // A failed handler must remain eligible for a later Poll delivery.
-            this.#seenEvents.delete(event.id);
-            const seenIndex = this.#seenOrder.indexOf(event.id);
-            if (seenIndex !== -1) this.#seenOrder.splice(seenIndex, 1);
+            // Release only this attempt's reservation; a newer attempt may have
+            // acquired the cooldown while a slow handler was still running.
+            if (this.#cooldowns.get(cooldownKey) === reservation) this.#cooldowns.delete(cooldownKey);
             const result = { status: "failed", eventId: event.id, command: event.command, error };
+            this.#rememberEvent(event.id, result);
             this.emit("commandError", result);
             return result;
         }
     }
 
     async handleWebhook(input) {
-        if (typeof this.#verifyWebhook !== "function" || !this.#verifyWebhook(input)) {
+        let verified = false;
+        try {
+            verified = typeof this.#verifyWebhook === "function" && this.#verifyWebhook(input) === true;
+        } catch {
+            // A verifier error must never authorize a request.
+        }
+        if (!verified) {
             return { status: "rejected", reason: "invalid_signature" };
         }
+        let payload;
+        let bytes;
         try {
             const rawBody = input?.rawBody;
-            const bytes = typeof rawBody === "string"
+            bytes = typeof rawBody === "string"
                 ? rawBody
                 : Buffer.from(rawBody instanceof ArrayBuffer ? new Uint8Array(rawBody) : rawBody).toString("utf8");
-            return await this.handle(JSON.parse(bytes));
+            payload = JSON.parse(bytes);
         } catch {
             return { status: "rejected", reason: "invalid_json" };
         }
+        if (!isRecord(payload)) return { status: "rejected", reason: "invalid_payload" };
+        if (!Object.hasOwn(payload, "events")) return await this.handle(payload);
+
+        const serverId = isRecord(payload.server) ? payload.server.id : payload.server;
+        // Validate the entire envelope before invoking any handler. A malformed
+        // later entry must not cause a partially processed, rejected request.
+        if (!Array.isArray(payload.events) || !payload.events.every(isWebhookEvent) ||
+            (isRecord(payload.server) && !isIdentity(payload.server.id)) ||
+            (serverId !== undefined && !isIdentity(serverId))) {
+            return { status: "rejected", reason: "invalid_payload" };
+        }
+        const batchId = createHash("sha256").update(bytes).digest("hex");
+        const results = [];
+        for (const [index, event] of payload.events.entries()) {
+            results.push(await this.handle({
+                ...event,
+                // Include the position so two identical events in one batch
+                // stay distinct while an exact replay keeps the same IDs.
+                id: event.id ?? event._id ?? `${batchId}:${index}`,
+                serverId: event.serverId ?? event.server ?? event.data?.serverId ?? event.data?.server ?? serverId
+            }));
+        }
+        return { status: "batch", results };
     }
 
     async start({ pollInterval = DEFAULT_POLL_INTERVAL, signal } = {}) {
@@ -319,12 +396,12 @@ export class CommandRouter extends EventEmitter {
         }
     }
 
-    #rememberEvent(id) {
-        this.#seenEvents.add(id);
-        this.#seenOrder.push(id);
-        if (this.#seenOrder.length <= this.#maxSeenEvents) return;
-        const removed = this.#seenOrder.shift();
-        if (removed) this.#seenEvents.delete(removed);
+    #rememberEvent(id, result) {
+        this.#seenEvents.delete(id);
+        this.#seenEvents.set(id, result);
+        if (this.#seenEvents.size > this.#maxSeenEvents) {
+            this.#seenEvents.delete(this.#seenEvents.keys().next().value);
+        }
     }
 
     #createContext(event) {
